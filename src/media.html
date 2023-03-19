@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdn.simplecss.org/simple.min.css">
+    <title>Play video</title>
+</head>
+<body>
+    <h1>{media_info.name}</h1>
+    <div class="container">
+      <p>Year: {media_info.year}</p>
+      <p class="file-path"><a href="{media_ref}" class="file-path">{media_ref}</a></p>
+      <div class="cast">
+        <google-cast-launcher></google-cast-launcher>
+      </div>
+      <div class="control">
+        <div class="state" id="state"></div>
+      </div>
+    </div>
+
+    <style>
+      .container \{
+        width: 80%;
+      }
+    </style>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/castjs/5.2.0/cast.min.js"></script>
+    <script src="media.js"></script>
+    <script>
+      init("{media_ref}");
+      cjs.on('statechange', function() \{
+        document.querySelector('#state').textContent = `Device: $\{cjs.device}, state: $\{cjs.state}`;
+      });
+    </script>
+
+    <style>
+      .cast \{
+        width: 20px;
+      }
+    </style>
+</body>
+</html>
