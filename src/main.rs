@@ -21,21 +21,26 @@ struct TemplateContext<'a> {
     media_ref: String
 }
 
+
 const DEFAULT_CSS_FILE: &str = include_str!("media.css");
 const DEFAULT_MEDIA_HTML_TEMPLATE: &str = include_str!("media.html");
 const DEFAULT_INDEX_HTML_TEMPLATE: &str = include_str!("media-index.html");
 const DEFAULT_JS_FILE: &str = include_str!("./../static/media.js");
 
 fn file_info(regexs: &Vec<Regex>, path: PathBuf) -> Option<MediaInfo> {    
-    path.file_name()
-    .and_then(|filename| filename.to_str()).map(|s| s.to_owned())
-    .and_then(|filename| {
-        regexs.iter()
-        .find_map(|re| re.captures(filename.as_str()))
-        .and_then(|captures| {
-            captures.name("name").map(|name| MediaInfo { name: name.as_str().into(), year: captures.name("year").and_then(|s| s.as_str().parse::<u32>().ok()), path: path.into() })
-        })
-    })
+    let filename = path.file_name()?.to_str()?;
+    let filename_match = regexs.iter().find_map(|re| re.captures(filename))?;
+    let name = {
+        let n = filename_match.name("name")?.as_str();
+        if !n.contains(" ") && n.contains(".") {
+            n.replace(".", " ")
+        } else {
+            n.to_owned()
+        }
+    };
+    let year = filename_match.name("year").and_then(|s| s.as_str().parse::<u32>().ok());
+
+    Some(MediaInfo{name: name, year: year, path: path})
 }
 
 fn scan_folders(basepath: &str) -> Vec<std::path::PathBuf> {
@@ -85,8 +90,10 @@ fn process_folder(template: &tinytemplate::TinyTemplate, base_url: &Option<Url>,
 
 lazy_static! {
     static ref MOVIE_PATTERNS_RE: Vec<Regex> = [
-        "(?P<name>[a-zA-Z0-9.]+)\\.(?P<year>\\d+).*",
-        "(?P<name>[a-zA-Z0-9 ]+) \\((?P<year>\\d+)\\).*"
+        "(?P<name>[a-zA-Z0-9.]+)\\.(?P<year>(?:19|20)\\d{2})\\..*",
+        "(?P<name>[a-zA-Z0-9 ]+) \\((?P<year>(?:19|20)\\d{2})\\).*",
+        "(?P<name>[a-zA-Z0-9 ]+) \\[(?P<year>(?:19|20)\\d{2})\\].*",
+        "(?P<name>[a-zA-Z0-9 ]+) (?P<year>(?:19|20)\\d{2}).*"
     ].iter().map(|pattern| Regex::new(pattern).unwrap()).collect();
     static ref TV_PATTERNS_RE: Vec<Regex> = [
         "(?P<name>.*)\\.mp4"
@@ -109,8 +116,8 @@ fn main() {
     let output_path = Path::new(&output_dir);
     std::fs::create_dir_all(output_path).unwrap();
     
-    app.get_many::<&str>("movies-folder").unwrap_or_default().for_each(|folder_spec| process_folder(&template, &base_url, output_path, &MOVIE_PATTERNS_RE, folder_spec));
-    app.get_many::<&str>("tv-folder").unwrap_or_default().for_each(|folder_spec| process_folder(&template, &base_url, output_path, &TV_PATTERNS_RE, folder_spec));
+    app.get_many::<String>("movies-folder").unwrap_or_default().for_each(|folder_spec| process_folder(&template, &base_url, output_path, &MOVIE_PATTERNS_RE, folder_spec));
+    app.get_many::<String>("tv-folder").unwrap_or_default().for_each(|folder_spec| process_folder(&template, &base_url, output_path, &TV_PATTERNS_RE, folder_spec));
     println!("Writing media.js");
     std::fs::write(output_path.join(Path::new("media.js")), DEFAULT_JS_FILE).unwrap();
 }
@@ -142,13 +149,11 @@ mod tests {
             assert_eq!(file_info(&MOVIE_PATTERNS_RE ,_path.clone()), Some(MediaInfo{path: _path, name: name.into(), year: year}));
         }
 
-        assert_movie_file_info("movies/Journey.To.The.West.Conquering.The.Demons.2013.720p.WEBRip.x264.AC3-JYK", "Journey To The West Conquering The Demons", Some(2013));
-        assert_movie_file_info("movies/Man On The Moon (1999) [1080p]", "Man On The Moon", Some(1999));
+        assert_movie_file_info("movies/Journey.To.The.West.Conquering.The.Demons.2013.720p.WEBRip.x264.AC3-JYK.mp4", "Journey To The West Conquering The Demons", Some(2013));
+        assert_movie_file_info("movies/Man On The Moon (1999) [1080p].mp4", "Man On The Moon", Some(1999));
         assert_movie_file_info("Movies/Movie 43 (2013) [1080p]/Movie.43.2013.1080p.BRrip.x264.GAZ.mp4", "Movie 43", Some(2013));
-
-        // What do we do with this one? "2009" can be a part of the name or not. May need to produce a list of possible file info structs?
-        // assert_file_info("Lesbian Vampire Killers 2009 720p BluRay x264 AAC-Mkvking.mkv", "Lesbian Vampire Killers", Some(2009));
-
-
+        assert_movie_file_info("Movies/The Kick [2011].x264.DVDrip(MartialArts).mp4", "The Kick", Some(2011));
+        assert_movie_file_info("Movies/Tropic Thunder 2008 Unrated DC 1080p BluRay HEVC H265 5.1 BONE.mp4", "Tropic Thunder", Some(2008));
+        assert_movie_file_info("Lesbian Vampire Killers 2009 720p BluRay x264 AAC-Mkvking.mkv", "Lesbian Vampire Killers", Some(2009));
     }
 }
