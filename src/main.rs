@@ -1,7 +1,7 @@
 use std::{path::{Path, PathBuf}, hash::{Hash, Hasher}};
 use clap;
 use serde_derive::{Serialize};
-use tinytemplate;
+use tera;
 use regex::Regex;
 use walkdir;
 use url::Url;
@@ -14,13 +14,6 @@ struct MediaInfo {
     year: Option<u32>,
     path: std::path::PathBuf
 }
-
-#[derive(Serialize, Debug)]
-struct TemplateContext<'a> {
-    media_info: &'a MediaInfo,
-    media_ref: String
-}
-
 
 const DEFAULT_CSS_FILE: &str = include_str!("media.css");
 const DEFAULT_MEDIA_HTML_TEMPLATE: &str = include_str!("media.html");
@@ -72,15 +65,15 @@ fn gen_media_ref(base_url: &Option<Url>, folder_path: &Path, folder_mount: &Stri
     }
 }
 
-fn process_folder(template: &tinytemplate::TinyTemplate, base_url: &Option<Url>, output_path: &Path, regexs: &Vec<Regex>, folder_spec: &str) {
+fn process_folder(template: &tera::Tera, base_url: &Option<Url>, output_path: &Path, regexs: &Vec<Regex>, folder_spec: &str) {
     let (folder, mount) = split_2_or(&folder_spec, None);
     scan_folders(&folder).iter().filter_map(|f| file_info(regexs, f.to_owned())).for_each(|media_info| {
         let media_ref = gen_media_ref(&base_url, Path::new(&folder), &mount, &media_info);
-        let t = template.render("media",
-        &TemplateContext{
-            media_ref: media_ref,
-            media_info: &media_info
-        }).unwrap();
+        let mut ctx = tera::Context::new();
+        ctx.insert("media_ref", &media_ref);
+        ctx.insert("media_info", &media_info);
+
+        let t = template.render("movie.html", &ctx).unwrap();
         println!("File: {:?}", media_info);
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         media_info.path.to_str().hash(& mut hasher);
@@ -109,8 +102,8 @@ fn main() {
     .arg(clap::Arg::new("base-url").long("base-url"))
     .get_matches();
 
-    let mut template = tinytemplate::TinyTemplate::new();
-    template.add_template("media", DEFAULT_MEDIA_HTML_TEMPLATE).unwrap();
+    let mut template = tera::Tera::default();
+    template.add_raw_template("movie.html", DEFAULT_MEDIA_HTML_TEMPLATE).unwrap();
     let output_dir = app.get_one::<String>("output-folder").unwrap();
     let base_url = app.get_one::<String>("base-url").and_then(|s| url::Url::parse(s).ok());
     let output_path = Path::new(&output_dir);
