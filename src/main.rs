@@ -1,42 +1,27 @@
-use std::{path::{Path, PathBuf}, hash::{Hash, Hasher}};
+use std::{path::Path, hash::{Hash, Hasher}};
 use clap;
-use serde_derive::{Serialize};
+use futures::{stream::TryStreamExt, StreamExt};
+use serde::Serialize;
 use tera;
-use regex::Regex;
 use walkdir;
 use url::Url;
 #[macro_use]
 extern crate lazy_static;
+extern crate tokio;
 
-#[derive(Serialize, Debug, PartialEq)]
-struct MediaInfo {
-    name: String,
-    year: Option<u32>,
-    path: std::path::PathBuf
-}
+mod movie;
+mod media;
+
+use media::MediaInfoEquiv;
+
+use crate::movie::MovieInfo;
 
 const DEFAULT_CSS_FILE: &str = include_str!("media.css");
 const DEFAULT_MEDIA_HTML_TEMPLATE: &str = include_str!("media.html");
 const DEFAULT_INDEX_HTML_TEMPLATE: &str = include_str!("media-index.html");
 const DEFAULT_JS_FILE: &str = include_str!("./../static/media.js");
 
-fn file_info(regexs: &Vec<Regex>, path: PathBuf) -> Option<MediaInfo> {    
-    let filename = path.file_name()?.to_str()?;
-    let filename_match = regexs.iter().find_map(|re| re.captures(filename))?;
-    let name = {
-        let n = filename_match.name("name")?.as_str();
-        if !n.contains(" ") && n.contains(".") {
-            n.replace(".", " ")
-        } else {
-            n.to_owned()
-        }
-    };
-    let year = filename_match.name("year").and_then(|s| s.as_str().parse::<u32>().ok());
-
-    Some(MediaInfo{name: name, year: year, path: path})
-}
-
-fn scan_folders(basepath: &str) -> Vec<std::path::PathBuf> {
+fn scan_folders(basepath: &Path) -> Vec<std::path::PathBuf> {
     walkdir::WalkDir::new(basepath)
     .max_depth(2).into_iter()
     .filter_map(|entry| entry.ok().map(|e| e.path().to_path_buf()))
@@ -52,8 +37,8 @@ fn split_2_or(s: &str, default_second: Option<&str>) -> (String, String) {
     (first.into(), second.into())
 }
 
-fn gen_media_ref(base_url: &Option<Url>, folder_path: &Path, folder_mount: &String, media: &MediaInfo) -> String {
-    let relative_path = media.path.strip_prefix(folder_path).unwrap();
+fn gen_media_ref(base_url: &Option<Url>, folder_path: &Path, folder_mount: &str, media_path: &Path) -> String {
+    let relative_path = media_path.strip_prefix(folder_path).unwrap();
     let path_components = relative_path.components().into_iter().map(|c| c.as_os_str().to_str().unwrap());
     
     match base_url {
@@ -65,10 +50,11 @@ fn gen_media_ref(base_url: &Option<Url>, folder_path: &Path, folder_mount: &Stri
     }
 }
 
-fn process_folder(template: &tera::Tera, base_url: &Option<Url>, output_path: &Path, regexs: &Vec<Regex>, folder_spec: &str) {
-    let (folder, mount) = split_2_or(&folder_spec, None);
-    scan_folders(&folder).iter().filter_map(|f| file_info(regexs, f.to_owned())).for_each(|media_info| {
-        let media_ref = gen_media_ref(&base_url, Path::new(&folder), &mount, &media_info);
+
+fn render_factory<'a, T>(template: &'a tera::Tera, output_path: &'a Path, base_url: &'a Option<Url>, folder: &'a Path, mount: &'a str) -> Box<dyn Fn(T) -> () + 'a> where T: MediaInfoEquiv + Serialize + std::fmt::Debug {
+    Box::new(move |media_info: T| {
+        let media_path = media_info.path();
+        let media_ref = gen_media_ref(&base_url, folder, &mount, media_path);
         let mut ctx = tera::Context::new();
         ctx.insert("media_ref", &media_ref);
         ctx.insert("media_info", &media_info);
@@ -76,30 +62,19 @@ fn process_folder(template: &tera::Tera, base_url: &Option<Url>, output_path: &P
         let t = template.render("movie.html", &ctx).unwrap();
         println!("File: {:?}", media_info);
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        media_info.path.to_str().hash(& mut hasher);
+        media_path.to_str().hash(& mut hasher);
         std::fs::write(output_path.join(std::path::Path::new(&(hasher.finish().to_string() + ".html"))), t).unwrap();
     })
 }
 
-lazy_static! {
-    static ref MOVIE_PATTERNS_RE: Vec<Regex> = [
-        "(?P<name>[a-zA-Z0-9.]+)\\.(?P<year>(?:19|20)\\d{2})\\..*",
-        "(?P<name>[a-zA-Z0-9 ]+) \\((?P<year>(?:19|20)\\d{2})\\).*",
-        "(?P<name>[a-zA-Z0-9 ]+) \\[(?P<year>(?:19|20)\\d{2})\\].*",
-        "(?P<name>[a-zA-Z0-9 ]+) (?P<year>(?:19|20)\\d{2}).*"
-    ].iter().map(|pattern| Regex::new(pattern).unwrap()).collect();
-    static ref TV_PATTERNS_RE: Vec<Regex> = [
-        "(?P<name>.*)\\.mp4"
-    ].iter().map(|pattern| Regex::new(pattern).unwrap()).collect();
-
-}
-
-fn main() {
+#[tokio::main]
+async fn main() {
     let app = clap::Command::new("nascast")
     .arg(clap::Arg::new("movies-folder").long("movies-folder").action(clap::ArgAction::Append))
     .arg(clap::Arg::new("tv-folder").long("tv-folder").action(clap::ArgAction::Append))
     .arg(clap::Arg::new("output-folder").long("output-folder").default_value("./pub"))
     .arg(clap::Arg::new("base-url").long("base-url"))
+    .arg(clap::Arg::new("omdb-api-key").long("omdb-api-key"))
     .get_matches();
 
     let mut template = tera::Tera::default();
@@ -107,10 +82,22 @@ fn main() {
     let output_dir = app.get_one::<String>("output-folder").unwrap();
     let base_url = app.get_one::<String>("base-url").and_then(|s| url::Url::parse(s).ok());
     let output_path = Path::new(&output_dir);
+    let omdb_api_key = app.get_one::<String>("omdb-api-key").unwrap();
     std::fs::create_dir_all(output_path).unwrap();
     
-    app.get_many::<String>("movies-folder").unwrap_or_default().for_each(|folder_spec| process_folder(&template, &base_url, output_path, &MOVIE_PATTERNS_RE, folder_spec));
-    app.get_many::<String>("tv-folder").unwrap_or_default().for_each(|folder_spec| process_folder(&template, &base_url, output_path, &TV_PATTERNS_RE, folder_spec));
+    for folder_spec in app.get_many::<String>("movies-folder").unwrap_or_default() {
+        let (s_folder, mount) = split_2_or(&folder_spec, None);
+        let folder = Path::new(&s_folder);
+        let render = render_factory(&template, output_path, &base_url, folder, &mount);
+        let info_futures = scan_folders(folder).iter()
+            .filter_map(|file| movie::parse_movie_filename(&movie::MOVIE_PATTERNS_RE, file))
+            .map(|movie_file_info| movie::get_movie_info(omdb_api_key, movie_file_info)).collect::<Vec<_>>();
+        let movies_infos = futures::stream::iter(info_futures).buffer_unordered(20).try_collect::<Vec<MovieInfo>>().await.unwrap();
+        for movie_info in movies_infos {
+            render(movie_info);
+        }
+    }
+    // app.get_many::<String>("tv-folder").unwrap_or_default().for_each(|folder_spec| process_folder(&template, &base_url, output_path, &TV_PATTERNS_RE, folder_spec));
     println!("Writing media.js");
     std::fs::write(output_path.join(Path::new("media.js")), DEFAULT_JS_FILE).unwrap();
 }
@@ -122,31 +109,16 @@ mod tests {
     
     use url::Url;
     
-    use crate::{MediaInfo, gen_media_ref, file_info, MOVIE_PATTERNS_RE};
-    
+    use crate::gen_media_ref;
+
     // nascast --movies-folder /media/storage/Movies:movies --base-url https://pi.nukembase
     // href - https://pi.nukembase/movies/somemovie.mp4
     #[test]
     fn test_media_ref() {
-        let media = MediaInfo{name: "some movie".to_string(), year: Some(1993), path: Path::new("./Movies/Some movie 1993/some movie 1993.mp4").to_path_buf()};
-        assert_eq!(gen_media_ref(&Url::parse("https://someserver:8080/media/").ok(), Path::new("./Movies"), &"movies".to_string(), &media), "https://someserver:8080/media/movies/Some%20movie%201993/some%20movie%201993.mp4");
+        let path = Path::new("./Movies/Some movie 1993/some movie 1993.mp4");
+        assert_eq!(gen_media_ref(&Url::parse("https://someserver:8080/media/").ok(), Path::new("./Movies"), &"movies".to_string(), path), "https://someserver:8080/media/movies/Some%20movie%201993/some%20movie%201993.mp4");
         // technically speaking, the base url should end with / or the last component isn't "the base". Might be confusing but there we are 
-        assert_eq!(gen_media_ref(&Url::parse("https://someserver:8080/media").ok(), Path::new("./Movies"), &"movies".to_string(), &media), "https://someserver:8080/movies/Some%20movie%201993/some%20movie%201993.mp4");
-        assert_eq!(gen_media_ref(&None, Path::new("./Movies"), &"movies".to_string(), &media), "movies/Some%20movie%201993/some%20movie%201993.mp4");
-    }
-
-    #[test]
-    fn test_movie_name_parsing() {
-        fn assert_movie_file_info(path: &str, name: &str, year: Option<u32>) {
-            let _path = Path::new(path).to_path_buf();
-            assert_eq!(file_info(&MOVIE_PATTERNS_RE ,_path.clone()), Some(MediaInfo{path: _path, name: name.into(), year: year}));
-        }
-
-        assert_movie_file_info("movies/Journey.To.The.West.Conquering.The.Demons.2013.720p.WEBRip.x264.AC3-JYK.mp4", "Journey To The West Conquering The Demons", Some(2013));
-        assert_movie_file_info("movies/Man On The Moon (1999) [1080p].mp4", "Man On The Moon", Some(1999));
-        assert_movie_file_info("Movies/Movie 43 (2013) [1080p]/Movie.43.2013.1080p.BRrip.x264.GAZ.mp4", "Movie 43", Some(2013));
-        assert_movie_file_info("Movies/The Kick [2011].x264.DVDrip(MartialArts).mp4", "The Kick", Some(2011));
-        assert_movie_file_info("Movies/Tropic Thunder 2008 Unrated DC 1080p BluRay HEVC H265 5.1 BONE.mp4", "Tropic Thunder", Some(2008));
-        assert_movie_file_info("Lesbian Vampire Killers 2009 720p BluRay x264 AAC-Mkvking.mkv", "Lesbian Vampire Killers", Some(2009));
+        assert_eq!(gen_media_ref(&Url::parse("https://someserver:8080/media").ok(), Path::new("./Movies"), &"movies".to_string(), path), "https://someserver:8080/movies/Some%20movie%201993/some%20movie%201993.mp4");
+        assert_eq!(gen_media_ref(&None, Path::new("./Movies"), &"movies".to_string(), path), "movies/Some%20movie%201993/some%20movie%201993.mp4");
     }
 }
