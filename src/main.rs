@@ -51,7 +51,8 @@ fn gen_media_ref(base_url: &Option<Url>, folder_path: &Path, folder_mount: &str,
 }
 
 
-fn render_factory<'a, T>(template: &'a tera::Tera, output_path: &'a Path, base_url: &'a Option<Url>, folder: &'a Path, mount: &'a str) -> Box<dyn Fn(T) -> () + 'a> where T: MediaInfoEquiv + Serialize + std::fmt::Debug {
+fn render_factory<'a, T>(template: &'a tera::Tera, output_path: &'a Path, base_url: &'a Option<Url>, folder: &'a Path, mount: &'a str) -> Box<dyn Fn(T) -> () + 'a>
+    where T: MediaInfoEquiv + Serialize + std::fmt::Debug {
     Box::new(move |media_info: T| {
         let media_path = media_info.path();
         let media_ref = gen_media_ref(&base_url, folder, &mount, media_path);
@@ -67,6 +68,12 @@ fn render_factory<'a, T>(template: &'a tera::Tera, output_path: &'a Path, base_u
     })
 }
 
+fn logger<T>(movie_info: T)
+    where T: MediaInfoEquiv + Serialize + std::fmt::Debug
+ {
+    println!("Media: {:?}", movie_info);
+ }
+
 #[tokio::main]
 async fn main() {
     let app = clap::Command::new("nascast")
@@ -75,20 +82,26 @@ async fn main() {
     .arg(clap::Arg::new("output-folder").long("output-folder").default_value("./pub"))
     .arg(clap::Arg::new("base-url").long("base-url"))
     .arg(clap::Arg::new("omdb-api-key").long("omdb-api-key"))
+    .arg(clap::Arg::new("noop").long("noop").help("NoOp mode: only show metadata, does not write anything to disk").action(clap::ArgAction::SetTrue))
     .get_matches();
 
     let mut template = tera::Tera::default();
     template.add_raw_template("movie.html", DEFAULT_MEDIA_HTML_TEMPLATE).unwrap();
-    let output_dir = app.get_one::<String>("output-folder").unwrap();
+    let output_dir = app.get_one::<String>("output-folder").expect("Output filter required");
     let base_url = app.get_one::<String>("base-url").and_then(|s| url::Url::parse(s).ok());
     let output_path = Path::new(&output_dir);
-    let omdb_api_key = app.get_one::<String>("omdb-api-key").unwrap();
+    let omdb_api_key = app.get_one::<String>("omdb-api-key").expect("OMDB API Key required");
+    let noop = app.get_flag("noop");
     std::fs::create_dir_all(output_path).unwrap();
     
     for folder_spec in app.get_many::<String>("movies-folder").unwrap_or_default() {
         let (s_folder, mount) = split_2_or(&folder_spec, None);
         let folder = Path::new(&s_folder);
-        let render = render_factory(&template, output_path, &base_url, folder, &mount);
+        let render = if noop {
+            render_factory(&template, output_path, &base_url, folder, &mount)
+        } else {
+            Box::new(logger)
+        };
         let info_futures = scan_folders(folder).iter()
             .filter_map(|file| movie::parse_movie_filename(&movie::MOVIE_PATTERNS_RE, file))
             .map(|movie_file_info| movie::get_movie_info(omdb_api_key, movie_file_info)).collect::<Vec<_>>();
