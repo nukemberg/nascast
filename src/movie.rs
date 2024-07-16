@@ -49,8 +49,8 @@ pub fn parse_movie_filename(regexs: &Vec<Regex>, path: &PathBuf) -> Option<Media
     Some(MediaInfo{name: name, year: year, path: path.to_owned()})
 }
 
-pub async fn get_movie_info(omdb_api_key: &str, movie_file_info: MediaInfo) -> Result<MovieInfo, Box<dyn std::error::Error>> {
-    let r = omdb_get_metadata(omdb_api_key, OmdbType::Movie, &movie_file_info.name, movie_file_info.year).await?;
+pub fn get_movie_info(omdb_api_key: &str, movie_file_info: MediaInfo) -> Result<MovieInfo, Box<dyn std::error::Error>> {
+    let r = omdb_get_metadata(omdb_api_key, OmdbType::Movie, &movie_file_info.name, movie_file_info.year)?;
     let info_url = r.imdb_url();
 
     Ok(MovieInfo{name: r.title, year: r.year, director: r.director,

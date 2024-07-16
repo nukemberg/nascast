@@ -65,8 +65,8 @@ impl std::fmt::Display for OmdbType {
     }
 }
 
-pub async fn omdb_get_metadata(omdb_api_key: &str, entity_type: OmdbType, title: &str, year: Option<u16>) -> Result<OmdbResponse, Box<dyn error::Error>> {
+pub fn omdb_get_metadata(omdb_api_key: &str, entity_type: OmdbType, title: &str, year: Option<u16>) -> Result<OmdbResponse, Box<dyn error::Error>> {
     let url = Url::parse_with_params(OMDB_API_URL, &[("apiKey", omdb_api_key), ("t", title), ("y", year.map(|y| y.to_string()).unwrap_or_default().as_str()), ("type", entity_type.to_string().as_str())])?;
-    let resp = reqwest::get(url).await?.json::<OmdbResponse>().await?;
+    let resp = reqwest::blocking::get(url)?.json::<OmdbResponse>()?;
     Ok(resp)
 }

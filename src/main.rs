@@ -1,20 +1,17 @@
 use std::{path::Path, hash::{Hash, Hasher}};
 use clap;
-use futures::{stream::TryStreamExt, StreamExt};
+use movie::MovieInfo;
 use serde::Serialize;
 use tera;
 use walkdir;
 use url::Url;
 #[macro_use]
 extern crate lazy_static;
-extern crate tokio;
 
 mod movie;
 mod media;
 
 use media::MediaInfoEquiv;
-
-use crate::movie::MovieInfo;
 
 const DEFAULT_CSS_FILE: &str = include_str!("media.css");
 const DEFAULT_MEDIA_HTML_TEMPLATE: &str = include_str!("media.html");
@@ -74,8 +71,7 @@ fn logger<T>(movie_info: T)
     println!("Media: {:?}", movie_info);
  }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let app = clap::Command::new("nascast")
     .arg(clap::Arg::new("movies-folder").long("movies-folder").action(clap::ArgAction::Append))
     .arg(clap::Arg::new("tv-folder").long("tv-folder").action(clap::ArgAction::Append))
@@ -102,11 +98,14 @@ async fn main() {
         } else {
             Box::new(logger)
         };
-        let info_futures = scan_folders(folder).iter()
+
+
+        let media_infos = scan_folders(folder).iter()
             .filter_map(|file| movie::parse_movie_filename(&movie::MOVIE_PATTERNS_RE, file))
-            .map(|movie_file_info| movie::get_movie_info(omdb_api_key, movie_file_info)).collect::<Vec<_>>();
-        let movies_infos = futures::stream::iter(info_futures).buffer_unordered(20).try_collect::<Vec<MovieInfo>>().await.unwrap();
-        for movie_info in movies_infos {
+            .filter_map(|info| movie::get_movie_info(omdb_api_key, info).ok() )
+            .collect::<Vec<MovieInfo>>();
+
+        for movie_info in media_infos {
             render(movie_info);
         }
     }
