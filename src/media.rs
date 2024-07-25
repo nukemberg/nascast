@@ -20,6 +20,7 @@ pub trait MediaInfoEquiv {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all(deserialize="snake_case"))]
 pub enum OmdbType {
     Movie,
     Series,
@@ -29,23 +30,23 @@ pub enum OmdbType {
 // {"Title":"Tropic Thunder","Year":"2008","Rated":"R","Released":"13 Aug 2008","Runtime":"107 min","Genre":"Action, Comedy, War","Director":"Ben Stiller","Writer":"Justin Theroux, Ben Stiller, Etan Cohen","Actors":"Ben Stiller, Jack Black, Robert Downey Jr.","Plot":"Through a series of freak occurrences, a group of actors shooting a big-budget war movie are forced to become the soldiers they are portraying.","Language":"English, Mandarin","Country":"United States, United Kingdom, Germany","Awards":"Nominated for 1 Oscar. 10 wins & 47 nominations total","Poster":"https://m.media-amazon.com/images/M/MV5BNDE5NjQzMDkzOF5BMl5BanBnXkFtZTcwODI3ODI3MQ@@._V1_SX300.jpg","Ratings":[{"Source":"Internet Movie Database","Value":"7.1/10"},{"Source":"Rotten Tomatoes","Value":"82%"},{"Source":"Metacritic","Value":"71/100"}],"Metascore":"71","imdbRating":"7.1","imdbVotes":"424,101","imdbID":"tt0942385","Type":"movie","DVD":"18 Nov 2008","BoxOffice":"$110,515,313","Production":"N/A","Website":"N/A","Response":"True"}
 
 #[derive(Deserialize)]
+#[serde(rename_all(deserialize="PascalCase"))]
 pub struct OmdbResponse {
     pub title: String,
-    pub year: u16,
+    pub year: String,
     pub runtime: String,
     pub genre: String,
     pub director: String,
     pub writer: String,
-    pub actors: Vec<String>,
+    pub actors: String,
     pub released: String,
     pub plot: String,
     pub language: String,
-    #[serde(rename(deserialize = "totalSeasons"))]
-    pub total_seasons: u8,
-    #[serde(rename(deserialize = "type"))]
+    pub total_seasons: Option<u8>,
+    #[serde(rename(deserialize = "Type"))]
     pub omdb_type: OmdbType,
     pub poster: String,
-    #[serde(rename(deserialize = "imdbID"))]
+    #[serde(rename(deserialize="imdbID"))]
     imdb_id: String
 }
 

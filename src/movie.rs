@@ -46,14 +46,28 @@ pub fn parse_movie_filename(regexs: &Vec<Regex>, path: &PathBuf) -> Option<Media
     };
     let year = filename_match.name("year").and_then(|s| s.as_str().parse::<u16>().ok());
 
+    log::info!(target: "cli", "Media file discovered: {name:?} ({path:?})");
+
     Some(MediaInfo{name: name, year: year, path: path.to_owned()})
+}
+
+pub fn get_movie_info_logged(omdb_api_key: &str, movie_file_info: MediaInfo) -> Result<MovieInfo, Box<dyn std::error::Error>> {
+    let name = movie_file_info.name.clone();
+    let movie_info = get_movie_info(omdb_api_key, movie_file_info);
+    match movie_info {
+        Ok(info) => Ok(info),
+        Err(err) => {
+            log::warn!("Failed to get movie info for {}, error: {}", name, err);
+            Err(err)
+        }
+    }
 }
 
 pub fn get_movie_info(omdb_api_key: &str, movie_file_info: MediaInfo) -> Result<MovieInfo, Box<dyn std::error::Error>> {
     let r = omdb_get_metadata(omdb_api_key, OmdbType::Movie, &movie_file_info.name, movie_file_info.year)?;
     let info_url = r.imdb_url();
 
-    Ok(MovieInfo{name: r.title, year: r.year, director: r.director,
+    Ok(MovieInfo{name: r.title, year: r.year.parse()?, director: r.director,
         poster_url: Url::parse(&r.poster)?, language: r.language, plot: r.plot,
         info_url: info_url, path: movie_file_info.path
     })

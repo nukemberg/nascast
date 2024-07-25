@@ -5,6 +5,7 @@ use serde::Serialize;
 use tera;
 use walkdir;
 use url::Url;
+use log;
 #[macro_use]
 extern crate lazy_static;
 
@@ -58,7 +59,6 @@ fn render_factory<'a, T>(template: &'a tera::Tera, output_path: &'a Path, base_u
         ctx.insert("media_info", &media_info);
 
         let t = template.render("movie.html", &ctx).unwrap();
-        println!("File: {:?}", media_info);
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         media_path.to_str().hash(& mut hasher);
         std::fs::write(output_path.join(std::path::Path::new(&(hasher.finish().to_string() + ".html"))), t).unwrap();
@@ -72,6 +72,13 @@ fn logger<T>(movie_info: T)
  }
 
 fn main() {
+    let log_config = log4rs::config::Config::builder().appender(
+        log4rs::config::Appender::builder().build("stdout", 
+        Box::new(log4rs::append::console::ConsoleAppender::builder().build())))
+        .logger(log4rs::config::Logger::builder().build("cli", log::LevelFilter::Info))
+        .build(log4rs::config::Root::builder().appender("stdout").build(log::LevelFilter::Warn)).unwrap();
+    let log_config_handle = log4rs::init_config(log_config).unwrap();
+    
     let app = clap::Command::new("nascast")
     .arg(clap::Arg::new("movies-folder").long("movies-folder").action(clap::ArgAction::Append))
     .arg(clap::Arg::new("tv-folder").long("tv-folder").action(clap::ArgAction::Append))
@@ -79,6 +86,7 @@ fn main() {
     .arg(clap::Arg::new("base-url").long("base-url"))
     .arg(clap::Arg::new("omdb-api-key").long("omdb-api-key"))
     .arg(clap::Arg::new("noop").long("noop").help("NoOp mode: only show metadata, does not write anything to disk").action(clap::ArgAction::SetTrue))
+    .arg(clap::Arg::new("verbosity").long("verbosity").short('v').action(clap::ArgAction::Set))
     .get_matches();
 
     let mut template = tera::Tera::default();
@@ -94,15 +102,15 @@ fn main() {
         let (s_folder, mount) = split_2_or(&folder_spec, None);
         let folder = Path::new(&s_folder);
         let render = if noop {
-            render_factory(&template, output_path, &base_url, folder, &mount)
-        } else {
             Box::new(logger)
+        } else {
+            render_factory(&template, output_path, &base_url, folder, &mount)
         };
 
 
         let media_infos = scan_folders(folder).iter()
             .filter_map(|file| movie::parse_movie_filename(&movie::MOVIE_PATTERNS_RE, file))
-            .filter_map(|info| movie::get_movie_info(omdb_api_key, info).ok() )
+            .filter_map(|info| movie::get_movie_info_logged(omdb_api_key, info).ok() )
             .collect::<Vec<MovieInfo>>();
 
         for movie_info in media_infos {
@@ -110,7 +118,7 @@ fn main() {
         }
     }
     // app.get_many::<String>("tv-folder").unwrap_or_default().for_each(|folder_spec| process_folder(&template, &base_url, output_path, &TV_PATTERNS_RE, folder_spec));
-    println!("Writing media.js");
+    log::warn!(target: "cli", "Writing media.js");
     std::fs::write(output_path.join(Path::new("media.js")), DEFAULT_JS_FILE).unwrap();
 }
 
