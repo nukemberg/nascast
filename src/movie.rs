@@ -19,7 +19,8 @@ pub struct MovieInfo {
     pub released: String,
     pub rated: String,
     pub actors: String,
-    pub imdb_rating: String
+    pub imdb_rating: String,
+    pub rotten_tomatoes_rating: Option<String>
 }
 
 impl MediaInfoEquiv for MovieInfo {
@@ -72,38 +73,48 @@ pub fn get_movie_info_logged(omdb_api_key: &str, movie_file_info: MediaInfo) -> 
 pub fn get_movie_info(omdb_api_key: &str, movie_file_info: MediaInfo) -> Result<MovieInfo, Box<dyn std::error::Error>> {
     let r = omdb_get_metadata(omdb_api_key, OmdbType::Movie, &movie_file_info.name, movie_file_info.year)?;
     match r {
-        OmdbResponse::Movie { 
-            title, 
-            year, 
-            director, 
-            poster, 
-            language, 
-            plot,
-            genre,
-            runtime,
-            released,
-            rated,
-            actors,
-            imdb_rating,
-            .. 
-        } => {
-            let info_url = Url::parse("https://www.imdb.com/title/").unwrap().join(&title).unwrap();
-            Ok(MovieInfo{
-                name: title,
-                year: year.parse()?,
-                director,
-                poster_url: Url::parse(&poster)?,
-                language,
+        OmdbResponse::Movie { .. } => {
+            let info_url = r.imdb_url();
+            if let OmdbResponse::Movie { 
+                title, 
+                year, 
+                director, 
+                poster, 
+                language, 
                 plot,
-                info_url,
-                path: movie_file_info.path,
                 genre,
                 runtime,
                 released,
                 rated,
                 actors,
-                imdb_rating
-            })
+                imdb_rating,
+                ratings,
+                ..
+            } = r {
+                let rotten_tomatoes_rating = ratings.iter()
+                    .find(|r| r.source == "Rotten Tomatoes")
+                    .map(|r| r.value.to_string());
+                    
+                Ok(MovieInfo{
+                    name: title,
+                    year: year.parse()?,
+                    director,
+                    poster_url: Url::parse(&poster)?,
+                    language,
+                    plot,
+                    info_url,
+                    path: movie_file_info.path,
+                    genre,
+                    runtime,
+                    released,
+                    rated,
+                    actors,
+                    imdb_rating,
+                    rotten_tomatoes_rating
+                })
+            } else {
+                unreachable!()
+            }
         },
         _ => Err("Wrong OMDB response".into())
     }

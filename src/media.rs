@@ -5,7 +5,7 @@ use reqwest;
 use url::Url;
 use std::error;
 
-const OMDB_API_URL: &str = "http://www.omdbapi.com";
+const OMDB_API_URL: &str = "https://www.omdbapi.com";
 
 #[derive(Serialize, Debug, PartialEq)]
 
