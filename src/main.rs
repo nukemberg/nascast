@@ -71,6 +71,15 @@ fn logger<T>(movie_info: T)
     println!("Media: {:?}", movie_info);
  }
 
+#[derive(Serialize)]
+struct MovieIndexInfo {
+    name: String,
+    year: u16,
+    director: String,
+    poster_url: String,
+    page_url: String,
+}
+
 fn main() {
     let log_config = log4rs::config::Config::builder().appender(
         log4rs::config::Appender::builder().build("stdout", 
@@ -91,12 +100,15 @@ fn main() {
 
     let mut template = tera::Tera::default();
     template.add_raw_template("movie.html", DEFAULT_MEDIA_HTML_TEMPLATE).unwrap();
+    template.add_raw_template("index.html", DEFAULT_INDEX_HTML_TEMPLATE).unwrap();
     let output_dir = app.get_one::<String>("output-folder").expect("Output filter required");
     let base_url = app.get_one::<String>("base-url").and_then(|s| url::Url::parse(s).ok());
     let output_path = Path::new(&output_dir);
     let omdb_api_key = app.get_one::<String>("omdb-api-key").expect("OMDB API Key required");
     let noop = app.get_flag("noop");
     std::fs::create_dir_all(output_path).unwrap();
+    
+    let mut all_movies = Vec::new();
     
     for folder_spec in app.get_many::<String>("movies-folder").unwrap_or_default() {
         let (s_folder, mount) = split_2_or(&folder_spec, None);
@@ -107,19 +119,42 @@ fn main() {
             render_factory(&template, output_path, &base_url, folder, &mount)
         };
 
-
         let media_infos = scan_folders(folder).iter()
             .filter_map(|file| movie::parse_movie_filename(&movie::MOVIE_PATTERNS_RE, file))
             .filter_map(|info| movie::get_movie_info_logged(omdb_api_key, info).ok() )
             .collect::<Vec<MovieInfo>>();
 
         for movie_info in media_infos {
-            render(movie_info);
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            movie_info.path().to_str().hash(&mut hasher);
+            let page_name = hasher.finish().to_string() + ".html";
+
+            all_movies.push(MovieIndexInfo {
+                name: movie_info.name.clone(),
+                year: movie_info.year,
+                director: movie_info.director.clone(),
+                poster_url: movie_info.poster_url.to_string(),
+                page_url: page_name,
+            });
+
+            if !noop {
+                render(movie_info);
+            }
         }
     }
-    // app.get_many::<String>("tv-folder").unwrap_or_default().for_each(|folder_spec| process_folder(&template, &base_url, output_path, &TV_PATTERNS_RE, folder_spec));
-    log::warn!(target: "cli", "Writing media.js");
-    std::fs::write(output_path.join(Path::new("media.js")), DEFAULT_JS_FILE).unwrap();
+
+    // Generate index page
+    if !noop {
+        let mut ctx = tera::Context::new();
+        ctx.insert("movies", &all_movies);
+        let index_html = template.render("index.html", &ctx).unwrap();
+        std::fs::write(output_path.join("index.html"), index_html).unwrap();
+        
+        // Write CSS and JS files
+        log::warn!(target: "cli", "Writing static files");
+        std::fs::write(output_path.join("media.css"), DEFAULT_CSS_FILE).unwrap();
+        std::fs::write(output_path.join("media.js"), DEFAULT_JS_FILE).unwrap();
+    }
 }
 
 

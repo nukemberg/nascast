@@ -6,14 +6,14 @@ use crate::media::{omdb_get_metadata, MediaInfo, MediaInfoEquiv, OmdbResponse, O
 
 #[derive(Serialize, Debug, PartialEq)]
 pub struct MovieInfo {
-    name: String,
-    year: u16,
-    director: String,
-    path: PathBuf,
-    info_url: Url,
-    poster_url: Url,
-    language: String,
-    plot: String
+    pub name: String,
+    pub year: u16,
+    pub director: String,
+    pub path: PathBuf,
+    pub info_url: Url,
+    pub poster_url: Url,
+    pub language: String,
+    pub plot: String
 }
 
 impl MediaInfoEquiv for MovieInfo {
