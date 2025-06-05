@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use regex::Regex;
 use url::Url;
 use serde_derive::Serialize;
-use crate::media::{MediaInfo, omdb_get_metadata, OmdbType, MediaInfoEquiv};
+use crate::media::{omdb_get_metadata, MediaInfo, MediaInfoEquiv, OmdbResponse, OmdbType};
 
 #[derive(Serialize, Debug, PartialEq)]
 pub struct MovieInfo {
@@ -65,12 +65,23 @@ pub fn get_movie_info_logged(omdb_api_key: &str, movie_file_info: MediaInfo) -> 
 
 pub fn get_movie_info(omdb_api_key: &str, movie_file_info: MediaInfo) -> Result<MovieInfo, Box<dyn std::error::Error>> {
     let r = omdb_get_metadata(omdb_api_key, OmdbType::Movie, &movie_file_info.name, movie_file_info.year)?;
-    let info_url = r.imdb_url();
+    match r {
+        OmdbResponse::Movie { title, year, director, poster, language, plot, .. } => {
+            let info_url = Url::parse("https://www.imdb.com/title/").unwrap().join(&title).unwrap();
+            Ok(MovieInfo{
+                name: title,
+                year: year.parse()?,
+                director,
+                poster_url: Url::parse(&poster)?,
+                language,
+                plot,
+                info_url,
+                path: movie_file_info.path
+            })
+        },
+        _ => Err("Wrong OMDB response".into())
+    }
 
-    Ok(MovieInfo{name: r.title, year: r.year.parse()?, director: r.director,
-        poster_url: Url::parse(&r.poster)?, language: r.language, plot: r.plot,
-        info_url: info_url, path: movie_file_info.path
-    })
 }
 
 mod tests {

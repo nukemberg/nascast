@@ -77,7 +77,7 @@ fn main() {
         Box::new(log4rs::append::console::ConsoleAppender::builder().build())))
         .logger(log4rs::config::Logger::builder().build("cli", log::LevelFilter::Info))
         .build(log4rs::config::Root::builder().appender("stdout").build(log::LevelFilter::Warn)).unwrap();
-    let log_config_handle = log4rs::init_config(log_config).unwrap();
+    let _log_config_handle = log4rs::init_config(log_config).unwrap();
     
     let app = clap::Command::new("nascast")
     .arg(clap::Arg::new("movies-folder").long("movies-folder").action(clap::ArgAction::Append))

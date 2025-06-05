@@ -29,30 +29,102 @@ pub enum OmdbType {
 
 // {"Title":"Tropic Thunder","Year":"2008","Rated":"R","Released":"13 Aug 2008","Runtime":"107 min","Genre":"Action, Comedy, War","Director":"Ben Stiller","Writer":"Justin Theroux, Ben Stiller, Etan Cohen","Actors":"Ben Stiller, Jack Black, Robert Downey Jr.","Plot":"Through a series of freak occurrences, a group of actors shooting a big-budget war movie are forced to become the soldiers they are portraying.","Language":"English, Mandarin","Country":"United States, United Kingdom, Germany","Awards":"Nominated for 1 Oscar. 10 wins & 47 nominations total","Poster":"https://m.media-amazon.com/images/M/MV5BNDE5NjQzMDkzOF5BMl5BanBnXkFtZTcwODI3ODI3MQ@@._V1_SX300.jpg","Ratings":[{"Source":"Internet Movie Database","Value":"7.1/10"},{"Source":"Rotten Tomatoes","Value":"82%"},{"Source":"Metacritic","Value":"71/100"}],"Metascore":"71","imdbRating":"7.1","imdbVotes":"424,101","imdbID":"tt0942385","Type":"movie","DVD":"18 Nov 2008","BoxOffice":"$110,515,313","Production":"N/A","Website":"N/A","Response":"True"}
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(rename_all(deserialize="PascalCase"))]
-pub struct OmdbResponse {
-    pub title: String,
-    pub year: String,
-    pub runtime: String,
-    pub genre: String,
-    pub director: String,
-    pub writer: String,
-    pub actors: String,
-    pub released: String,
-    pub plot: String,
-    pub language: String,
-    pub total_seasons: Option<u8>,
-    #[serde(rename(deserialize = "Type"))]
-    pub omdb_type: OmdbType,
-    pub poster: String,
-    #[serde(rename(deserialize="imdbID"))]
-    imdb_id: String
+pub struct OmdbRatings {
+    pub source: String,
+    pub value: String
+} 
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all(deserialize="PascalCase"), tag="Type")]
+pub enum OmdbResponse {
+    #[serde(rename="movie")]
+    Movie {
+        #[serde(rename="Actors")]
+        actors: String,
+        #[serde(rename="Awards")]
+        awards: String,
+        #[serde(rename="Country")]
+        country: String,
+        #[serde(rename="Director")]
+        director: String,
+        #[serde(rename="Genre")]
+        genre: String,
+        #[serde(rename="Language")]
+        language: String,
+        #[serde(rename="Plot")]
+        plot: String,
+        #[serde(rename="Poster")]
+        poster: String,
+        #[serde(rename="Rated")]
+        rated: String,
+        #[serde(rename="Ratings")]
+        ratings: Vec<OmdbRatings>,
+        #[serde(rename="Released")]
+        released: String,
+        #[serde(rename="Runtime")]
+        runtime: String,
+        #[serde(rename="Title")]
+        title: String,
+        #[serde(rename="Writer")]
+        writer: String,
+        #[serde(rename="Year")]
+        year: String,
+        #[serde(rename="imdbID")]
+        imdb_id: String,
+        #[serde(rename="imdbRating")]
+        imdb_rating: String    
+    },
+    #[serde(rename="series")]
+    Series {
+        #[serde(rename="Actors")]
+        actors: String,
+        #[serde(rename="Awards")]
+        awards: String,
+        #[serde(rename="Country")]
+        country: String,
+        #[serde(rename="Director")]
+        director: String,
+        #[serde(rename="Genre")]
+        genre: String,
+        #[serde(rename="Language")]
+        language: String,
+        #[serde(rename="Plot")]
+        plot: String,
+        #[serde(rename="Poster")]
+        poster: String,
+        #[serde(rename="Rated")]
+        rated: String,
+        #[serde(rename="Ratings")]
+        ratings: Vec<OmdbRatings>,
+        #[serde(rename="Released")]
+        released: String,
+        #[serde(rename="Runtime")]
+        runtime: String,
+        #[serde(rename="Title")]
+        title: String,
+        #[serde(rename="Writer")]
+        writer: String,
+        #[serde(rename="Year")]
+        year: String,
+        #[serde(rename="imdbID")]
+        imdb_id: String,
+        #[serde(rename="imdbRating")]
+        imdb_rating: String,
+        #[serde(rename="totalSeasons")]
+        total_seasons: String
+    }
 }
+
 
 impl OmdbResponse {
     pub fn imdb_url(&self) -> Url {
-        Url::parse("https://www.imdb.com/title/").unwrap().join(&self.imdb_id).unwrap()
+        let imdb_id = match self {
+            OmdbResponse::Movie { imdb_id, .. } => imdb_id,
+            OmdbResponse::Series { imdb_id, .. } => imdb_id,
+        };
+        Url::parse("https://www.imdb.com/title/").unwrap().join(imdb_id).unwrap()
     }
 }
 
