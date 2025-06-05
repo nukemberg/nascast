@@ -4,41 +4,70 @@
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="https://cdn.simplecss.org/simple.min.css">
-    <title>Play video</title>
+    <link rel="stylesheet" href="media.css">
+    <title>{{media_info.name}} ({{media_info.year}}) - Movie Details</title>
 </head>
 <body>
-    <h1>{{media_info.name}}</h1>
-    <div class="container">
-      <p>Year: {{media_info.year}}</p>
-      <p class="file-path"><a href="{{media_ref}}" class="file-path">{{media_ref}}</a></p>
-      <div class="cast">
-        <google-cast-launcher></google-cast-launcher>
-      </div>
-      <div class="control">
-        <div class="state" id="state"></div>
-      </div>
+    <div class="movie-details">
+        <div class="movie-header">
+            <h1>{{media_info.name}} ({{media_info.year}})</h1>
+            <a href="index.html" class="back-link">← Back to Movies</a>
+        </div>
+        
+        <div class="movie-content">
+            <div class="movie-poster">
+                <a href="{{media_ref}}" class="poster-link">
+                    <img src="{{media_info.poster_url}}" alt="{{media_info.name}} Poster" onerror="this.src='https://via.placeholder.com/300x450.png?text=No+Poster'">
+                    <div class="play-overlay">
+                        <span class="play-button">▶ Play Movie</span>
+                    </div>
+                </a>
+            </div>
+            
+            <div class="movie-info-details">
+                <div class="metadata">
+                    <div class="movie-header-details">
+                        <div class="rating-badge">{{media_info.rated}}</div>
+                        <span>{{media_info.runtime}}</span>
+                        <span>Released: {{media_info.released}}</span>
+                        <div class="imdb-rating">⭐ {{media_info.imdb_rating}}/10</div>
+                    </div>
+
+                    <div class="genre-tags">
+                        <span class="genre-tag">{{media_info.genre}}</span>
+                    </div>
+
+                    <h2>About the Movie</h2>
+                    <p class="plot">{{media_info.plot}}</p>
+                    
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <span class="label">Director</span>
+                            <span class="value">{{media_info.director}}</span>
+                        </div>
+                        <div class="info-item full-width">
+                            <span class="label">Cast</span>
+                            <div class="cast-list">
+                                <span class="actor">{{media_info.actors}}</span>
+                            </div>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Language</span>
+                            <span class="value">{{media_info.language}}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="watch-controls">
+                    <a href="{{media_ref}}" class="play-button-large">Play Movie</a>
+                    <div class="cast-container">
+                        <google-cast-launcher></google-cast-launcher>
+                        <div class="cast-status" id="state"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
-
-    <style>
-      .container {
-        width: 80%;
-      }
-    </style>
-
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/castjs/5.2.0/cast.min.js"></script>
     <script src="media.js"></script>
-    <script>
-      init("{{media_ref}}");
-      cjs.on('statechange', function() {
-        document.querySelector('#state').textContent = `Device: $\{cjs.device}, state: $\{cjs.state}`;
-      });
-    </script>
-
-    <style>
-      .cast {
-        width: 20px;
-      }
-    </style>
 </body>
 </html>

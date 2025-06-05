@@ -13,7 +13,13 @@ pub struct MovieInfo {
     pub info_url: Url,
     pub poster_url: Url,
     pub language: String,
-    pub plot: String
+    pub plot: String,
+    pub genre: String,
+    pub runtime: String,
+    pub released: String,
+    pub rated: String,
+    pub actors: String,
+    pub imdb_rating: String
 }
 
 impl MediaInfoEquiv for MovieInfo {
@@ -66,7 +72,21 @@ pub fn get_movie_info_logged(omdb_api_key: &str, movie_file_info: MediaInfo) -> 
 pub fn get_movie_info(omdb_api_key: &str, movie_file_info: MediaInfo) -> Result<MovieInfo, Box<dyn std::error::Error>> {
     let r = omdb_get_metadata(omdb_api_key, OmdbType::Movie, &movie_file_info.name, movie_file_info.year)?;
     match r {
-        OmdbResponse::Movie { title, year, director, poster, language, plot, .. } => {
+        OmdbResponse::Movie { 
+            title, 
+            year, 
+            director, 
+            poster, 
+            language, 
+            plot,
+            genre,
+            runtime,
+            released,
+            rated,
+            actors,
+            imdb_rating,
+            .. 
+        } => {
             let info_url = Url::parse("https://www.imdb.com/title/").unwrap().join(&title).unwrap();
             Ok(MovieInfo{
                 name: title,
@@ -76,7 +96,13 @@ pub fn get_movie_info(omdb_api_key: &str, movie_file_info: MediaInfo) -> Result<
                 language,
                 plot,
                 info_url,
-                path: movie_file_info.path
+                path: movie_file_info.path,
+                genre,
+                runtime,
+                released,
+                rated,
+                actors,
+                imdb_rating
             })
         },
         _ => Err("Wrong OMDB response".into())
