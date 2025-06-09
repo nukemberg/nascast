@@ -11,12 +11,14 @@ extern crate lazy_static;
 
 mod movie;
 mod media;
+mod tv; // Add tv module
 
 use media::MediaInfoEquiv;
+use tv::TvSeriesMediaInfo; // Removed TvEpisodeMediaInfo import
 
 const DEFAULT_CSS_FILE: &str = include_str!("media.css");
 const DEFAULT_MEDIA_HTML_TEMPLATE: &str = include_str!("media.html");
-const DEFAULT_INDEX_HTML_TEMPLATE: &str = include_str!("media-index.html");
+const DEFAULT_INDEX_HTML_TEMPLATE: &str = include_str!("index.html");
 const DEFAULT_JS_FILE: &str = include_str!("./../static/media.js");
 
 fn scan_folders(basepath: &Path) -> Vec<std::path::PathBuf> {
@@ -80,6 +82,15 @@ struct MovieIndexInfo {
     page_url: String,
 }
 
+#[derive(Serialize)]
+struct TvSeriesIndexInfo {
+    name: String,
+    year: Option<u16>,
+    episodes_count: usize,
+    page_url: String,
+    poster_url: String,
+}
+
 fn main() {
     let log_config = log4rs::config::Config::builder().appender(
         log4rs::config::Appender::builder().build("stdout", 
@@ -101,6 +112,8 @@ fn main() {
     let mut template = tera::Tera::default();
     template.add_raw_template("movie.html", DEFAULT_MEDIA_HTML_TEMPLATE).unwrap();
     template.add_raw_template("index.html", DEFAULT_INDEX_HTML_TEMPLATE).unwrap();
+    template.add_raw_template("movies.html", include_str!("movies.html")).unwrap();
+    template.add_raw_template("tv.html", include_str!("tv.html")).unwrap();
     let output_dir = app.get_one::<String>("output-folder").expect("Output filter required");
     let base_url = app.get_one::<String>("base-url").and_then(|s| url::Url::parse(s).ok());
     let output_path = Path::new(&output_dir);
@@ -143,15 +156,73 @@ fn main() {
         }
     }
 
-    // Generate index page
+    // Changed from HashMap to Vec<TvSeriesMediaInfo>
+    let mut all_tv_series: Vec<TvSeriesMediaInfo> = Vec::new(); 
+
+    for folder_spec in app.get_many::<String>("tv-folder").unwrap_or_default() {
+        let (s_folder, _mount) = split_2_or(&folder_spec, None); // Mount point not used yet for TV
+        let folder = Path::new(&s_folder);
+        log::info!(target: "cli", "Scanning TV folder: {:?}", folder);
+
+        match tv::scan_tv_directory(folder) { // scan_tv_directory now returns Vec<TvSeriesMediaInfo>
+            Ok(series_list) => { // series_list is Vec<TvSeriesMediaInfo>
+                log::info!(target: "cli", "Found {} series in TV folder: {:?}", series_list.len(), folder);
+                for series_data in series_list { // series_data is TvSeriesMediaInfo
+                    log::info!(target: "cli", "  Found Series: '{}', Year: {:?}, Path: {:?}, Episodes: {}", 
+                               series_data.name, series_data.year, series_data.path, series_data.episodes.len());
+                    for episode in &series_data.episodes { // Iterate over episodes within the series
+                        log::debug!(target: "cli", "    Episode: S{:02}E{:02} - Path: {:?}", episode.season, episode.episode, episode.path);
+                    }
+                    all_tv_series.push(series_data); // Add the TvSeriesMediaInfo struct to the list
+                }
+            }
+            Err(e) => {
+                log::error!(target: "cli", "Error scanning TV directory {:?}: {}", folder, e);
+            }
+        }
+    }
+
+    // Log the collected series information (optional, already logged above)
+    // for series_data in &all_tv_series {
+    //     log::info!(target: "cli", "Collected Series: '{}', Episodes: {}", series_data.name, series_data.episodes.len());
+    // }
+
+    // Generate index pages
     if !noop {
-        let mut ctx = tera::Context::new();
-        ctx.insert("movies", &all_movies);
-        let index_html = template.render("index.html", &ctx).unwrap();
+        // Create TV series index info
+        let tv_series_index: Vec<TvSeriesIndexInfo> = all_tv_series.iter().map(|series| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            series.path.to_str().hash(&mut hasher);
+            let page_name = hasher.finish().to_string() + ".html";
+            TvSeriesIndexInfo {
+                name: series.name.clone(),
+                year: series.year,
+                episodes_count: series.episodes.len(),
+                poster_url: series.poster_url.to_string(), // Make sure this field exists
+                page_url: page_name,
+            }
+        }).collect();
+
+        // Generate main index page
+        let mut index_ctx = tera::Context::new();
+        index_ctx.insert("movie_count", &all_movies.len());
+        index_ctx.insert("tv_count", &all_tv_series.len());
+        let index_html = template.render("index.html", &index_ctx).unwrap();
         std::fs::write(output_path.join("index.html"), index_html).unwrap();
         
+        // Generate movies listing page
+        let mut movies_ctx = tera::Context::new();
+        movies_ctx.insert("movies", &all_movies);
+        let movies_html = template.render("movies.html", &movies_ctx).unwrap();
+        std::fs::write(output_path.join("movies.html"), movies_html).unwrap();
+        
+        // Generate TV series listing page
+        let mut tv_ctx = tera::Context::new();
+        tv_ctx.insert("series", &tv_series_index);
+        let tv_html = template.render("tv.html", &tv_ctx).unwrap();
+        std::fs::write(output_path.join("tv.html"), tv_html).unwrap();
+        
         // Write CSS and JS files
-        log::warn!(target: "cli", "Writing static files");
         std::fs::write(output_path.join("media.css"), DEFAULT_CSS_FILE).unwrap();
         std::fs::write(output_path.join("media.js"), DEFAULT_JS_FILE).unwrap();
     }

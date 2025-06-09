@@ -91,7 +91,6 @@ body {
     color: #666;
     font-size: 0.9rem;
 }
-}
 
 .movie-info h2 {
     margin: 0;
@@ -362,5 +361,283 @@ google-cast-launcher {
 
     .info-grid {
         grid-template-columns: 1fr;
+    }
+}
+
+/* Main index page styling */
+.media-collection {
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.media-collection h1 {
+    text-align: center;
+    color: #333;
+    margin-bottom: 40px;
+    font-size: 2.5rem;
+}
+
+.media-types {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 2rem;
+    padding: 0 20px;
+}
+
+.media-type {
+    background: white;
+    border-radius: 12px;
+    padding: 2rem;
+    text-align: center;
+    text-decoration: none;
+    color: inherit;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    transition: all 0.3s ease;
+}
+
+.media-type:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+}
+
+.media-type h2 {
+    margin: 0 0 1rem 0;
+    font-size: 2rem;
+    color: #333;
+}
+
+.media-type p {
+    margin: 0;
+    color: #666;
+    font-size: 1.2rem;
+}
+
+/* Navigation bar */
+.media-nav {
+    margin-bottom: 30px;
+}
+
+.back-link {
+    display: inline-block;
+    text-decoration: none;
+    color: #555;
+    font-size: 1.1rem;
+    padding: 10px;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+}
+
+.back-link:hover {
+    background: #eee;
+    color: #333;
+}
+
+/* TV shows list styling (similar to movies) */
+.tv-list {
+    width: 100%;
+    margin: 0 auto;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.tv-list h1 {
+    text-align: center;
+    color: #333;
+    margin-bottom: 30px;
+    font-size: 2.5rem;
+}
+
+.tv-shows {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 2rem;
+    padding: 0 20px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.tv-item {
+    background: white;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    transition: all 0.3s ease;
+    height: 100%;
+}
+
+.tv-item:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+}
+
+.tv-item a {
+    text-decoration: none;
+    color: inherit;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.tv-item img {
+    width: 100%;
+    aspect-ratio: 2/3;
+    object-fit: cover;
+    display: block;
+}
+
+.tv-info {
+    padding: 1.5rem;
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.tv-info h2 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1.2rem;
+    line-height: 1.4;
+}
+
+.tv-info p {
+    margin: 0;
+    color: #666;
+    font-size: 0.9rem;
+}
+
+/* Responsive design for main index */
+@media screen and (max-width: 768px) {
+    .media-types {
+        grid-template-columns: 1fr;
+        max-width: 400px;
+        margin: 0 auto;
+        padding: 0 10px;
+    }
+
+    .media-collection h1 {
+        font-size: 2rem;
+    }
+
+    .media-type h2 {
+        font-size: 1.8rem;
+    }
+
+    .media-type p {
+        font-size: 1rem;
+    }
+}
+
+/* Media Collection Landing Page */
+.media-collection {
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 2rem;
+    box-sizing: border-box;
+}
+
+.media-collection h1 {
+    text-align: center;
+    color: #333;
+    margin-bottom: 2rem;
+    font-size: 2.5rem;
+}
+
+.media-types {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 2rem;
+    padding: 1rem;
+}
+
+.media-type {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: white;
+    padding: 3rem 2rem;
+    border-radius: 12px;
+    text-decoration: none;
+    color: #333;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.media-type:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+}
+
+.media-type::before {
+    content: "";
+    font-family: "Material Icons";
+    font-size: 64px;
+    margin-bottom: 1.5rem;
+    opacity: 0.9;
+}
+
+.media-type h2 {
+    margin: 0 0 1rem 0;
+    font-size: 1.8rem;
+    position: relative;
+    z-index: 1;
+}
+
+.media-type p {
+    margin: 0;
+    font-size: 1.2rem;
+    color: #666;
+    position: relative;
+    z-index: 1;
+}
+
+.media-type.movies {
+    background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+    color: white;
+}
+
+.media-type.movies::before {
+    content: "movie";
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.media-type.movies p {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.media-type.tv-shows {
+    background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
+    color: white;
+}
+
+.media-type.tv-shows::before {
+    content: "tv";
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.media-type.tv-shows p {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+/* Responsive design for landing page */
+@media screen and (max-width: 768px) {
+    .media-types {
+        grid-template-columns: 1fr;
+        max-width: 400px;
+        margin: 0 auto;
+    }
+    
+    .media-collection h1 {
+        font-size: 2rem;
+    }
+    
+    .media-type::before {
+        font-size: 48px;
     }
 }

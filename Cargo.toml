@@ -19,3 +19,4 @@ tera = "1.18.1"
 url = { version = "2.3.1", features = ["serde"] }
 urlencoding = "2.1.2"
 walkdir = "2.3.2"
+tempfile = "3.10.1"
