@@ -51,6 +51,8 @@ pub struct TvEpisodeMediaInfo {
     pub air_date: Option<String>,
     /// Episode director from OMDB.
     pub director: Option<String>,
+    /// Play link to the episode file (relative or absolute URI)
+    pub media_ref: Option<String>,
 }
 
 impl MediaInfoEquiv for TvEpisodeMediaInfo {
@@ -215,6 +217,7 @@ pub fn parse_tv_episode_path(
                 imdb_rating: None,
                 air_date: None,
                 director: None,
+                media_ref: None,
             });
         }
     }
@@ -644,6 +647,7 @@ mod tests {
             imdb_rating: None,
             air_date: None,
             director: None,
+            media_ref: None,
         };
 
         // Series 1: Standard structure

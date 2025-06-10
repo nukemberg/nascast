@@ -160,7 +160,7 @@ fn main() {
     let mut all_tv_series: Vec<TvSeriesMediaInfo> = Vec::new(); 
 
     for folder_spec in app.get_many::<String>("tv-folder").unwrap_or_default() {
-        let (s_folder, _mount) = split_2_or(&folder_spec, None); // Mount point not used yet for TV
+        let (s_folder, mount) = split_2_or(&folder_spec, None); // Now use mount for TV
         let folder = Path::new(&s_folder);
         log::info!(target: "cli", "Scanning TV folder: {:?}", folder);
 
@@ -182,7 +182,7 @@ fn main() {
                         series_data.country = Some(series_info.country);
                         series_data.imdb_rating = Some(series_info.imdb_rating);
                         series_data.total_seasons = Some(series_info.total_seasons);
-                        // For each episode, get detailed info
+                        // For each episode, get detailed info and set media_ref
                         for episode in series_data.episodes.iter_mut() {
                             if let Ok(ep_info) = tv::get_episode_info(omdb_api_key, &series_data.name, episode.season, episode.episode) {
                                 episode.title = Some(ep_info.title);
@@ -191,6 +191,8 @@ fn main() {
                                 episode.air_date = ep_info.aired_date;
                                 episode.director = ep_info.director;
                             }
+                            // Set media_ref for episode
+                            episode.media_ref = Some(gen_media_ref(&base_url, folder, &mount, &episode.path));
                         }
                     }
                     all_tv_series.push(series_data);
@@ -266,7 +268,7 @@ fn main() {
                             imdb_rating: ep.imdb_rating.clone(),
                             aired_date: ep.air_date.clone(),
                             director: ep.director.clone(),
-                            media_ref: String::new(), // Fill if needed
+                            media_ref: ep.media_ref.clone().unwrap_or_default(),
                         }).collect(),
                     }
                 }).collect();
