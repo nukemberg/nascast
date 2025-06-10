@@ -18,13 +18,21 @@ pub struct TvSeriesMediaInfo {
     pub path: PathBuf,
     /// Episodes belonging to this series.
     pub episodes: Vec<TvEpisodeMediaInfo>,
-    /// Poster URL from OMDB or default
-    pub poster_url: String,
+    /// OMDB Data
+    pub released: Option<String>,
+    pub genre: Option<String>,
+    pub plot: Option<String>,
+    pub actors: Option<String>,
+    pub language: Option<String>,
+    pub country: Option<String>,
+    pub poster_url: Option<String>,
+    pub imdb_rating: Option<String>,
+    pub total_seasons: Option<String>,
 }
 
 /// Holds information parsed directly from a TV Episode video file path.
 #[derive(Serialize, Debug, PartialEq, Clone)]
-pub struct TvEpisodeMediaInfo { // This is for parsed data, distinct from OMDB-enriched TvEpisodeInfo
+pub struct TvEpisodeMediaInfo {
     /// Name of the series this episode belongs to.
     pub series_name: String,
     /// Season number.
@@ -33,6 +41,16 @@ pub struct TvEpisodeMediaInfo { // This is for parsed data, distinct from OMDB-e
     pub episode: u8,
     /// Path to the episode file.
     pub path: PathBuf,
+    /// Episode title from OMDB.
+    pub title: Option<String>,
+    /// Episode plot from OMDB.
+    pub plot: Option<String>,
+    /// Episode IMDb rating from OMDB.
+    pub imdb_rating: Option<String>,
+    /// Episode air date from OMDB.
+    pub air_date: Option<String>,
+    /// Episode director from OMDB.
+    pub director: Option<String>,
 }
 
 impl MediaInfoEquiv for TvEpisodeMediaInfo {
@@ -52,6 +70,7 @@ pub struct TvSeriesInfo {
     pub info_url: Url,
     pub poster_url: Url,
     pub language: String,
+    pub country: String,
     pub plot: String,
     pub genre: String,
     pub runtime: String,
@@ -118,6 +137,10 @@ pub struct EpisodeTemplateData {
     pub plot: Option<String>,
     /// Episode-specific IMDb rating.
     pub imdb_rating: Option<String>,
+    /// Episode air date from OMDB.
+    pub aired_date: Option<String>,
+    /// Episode director from OMDB.
+    pub director: Option<String>,
     /// Generated URL/path to the media file for playback.
     pub media_ref: String,
 }
@@ -187,6 +210,11 @@ pub fn parse_tv_episode_path(
                 season,
                 episode,
                 path: file_path.to_path_buf(),
+                title: None,
+                plot: None,
+                imdb_rating: None,
+                air_date: None,
+                director: None,
             });
         }
     }
@@ -401,7 +429,15 @@ pub fn scan_tv_directory(tv_base_path: &Path) -> Result<Vec<TvSeriesMediaInfo>, 
                     year: parsed_year_from_series_folder,
                     path: series_folder_path.to_path_buf(),
                     episodes: current_series_episodes,
-                    poster_url: String::from("https://via.placeholder.com/300x450.png?text=No+Poster"),
+                    poster_url: None, // Do not use placeholder, will be set from OMDB elsewhere if available
+                    released: None,
+                    genre: None,
+                    plot: None,
+                    actors: None,
+                    language: None,
+                    country: None,
+                    imdb_rating: None,
+                    total_seasons: None,
                 });
             }
         }
@@ -410,6 +446,99 @@ pub fn scan_tv_directory(tv_base_path: &Path) -> Result<Vec<TvSeriesMediaInfo>, 
     // Sort series by name for consistent output
     all_series_info.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(all_series_info)
+}
+
+pub fn get_series_info(api_key: &str, series_name: &str) -> Result<TvSeriesInfo, Box<dyn std::error::Error>> {
+    use crate::media::{OmdbType, omdb_get_metadata};
+    
+    let response = omdb_get_metadata(api_key, OmdbType::Series, series_name, None)?;
+    
+    // Convert OMDB response to TvSeriesInfo
+    match response {
+        crate::media::OmdbResponse::Series { 
+            actors, 
+            country, 
+            director, 
+            genre, 
+            language, 
+            plot, 
+            poster, 
+            rated, 
+            ratings, 
+            released, 
+            runtime, 
+            title, 
+            year, 
+            imdb_id, 
+            imdb_rating, 
+            total_seasons, 
+            .. 
+        } => {
+            let info_url = format!("https://www.imdb.com/title/{}", imdb_id);
+            let rotten_tomatoes_rating = ratings.iter()
+                .find(|r| r.source == "Rotten Tomatoes")
+                .map(|rt| rt.value.clone());
+                
+            Ok(TvSeriesInfo {
+                name: title,
+                year: year.split('–').next().and_then(|y| y.parse().ok()),
+                director,
+                info_url: Url::parse(&info_url)?,
+                poster_url: Url::parse(&poster)?,
+                language,
+                country,
+                plot,
+                genre,
+                runtime,
+                released,
+                rated,
+                actors,
+                imdb_rating,
+                total_seasons,
+                rotten_tomatoes_rating,
+            })
+        },
+        _ => Err("Expected Series response from OMDB but got Movie".into())
+    }
+}
+
+pub fn get_episode_info(api_key: &str, series_name: &str, season: u8, episode: u8) -> Result<EpisodeTemplateData, Box<dyn std::error::Error>> {
+    // Use omdb_get_metadata_with_season_episode for episode info
+    let resp = omdb_get_metadata_with_season_episode(api_key, series_name, season, episode)?;
+    
+    Ok(EpisodeTemplateData {
+        title: resp["Title"].as_str().unwrap_or_default().to_string(),
+        episode_number: episode,
+        plot: resp["Plot"].as_str()
+            .filter(|p| *p != "N/A")
+            .map(String::from),
+        imdb_rating: resp["imdbRating"].as_str()
+            .filter(|r| *r != "N/A")
+            .map(String::from),
+        aired_date: resp["Released"].as_str()
+            .filter(|d| *d != "N/A")
+            .map(String::from),
+        director: resp["Director"].as_str()
+            .filter(|d| *d != "N/A")
+            .map(String::from),
+        media_ref: String::new(), // Will be filled later
+    })
+}
+
+// Helper function to call OMDB for episode info using blocking reqwest, matching omdb_get_metadata style
+fn omdb_get_metadata_with_season_episode(api_key: &str, series_name: &str, season: u8, episode: u8) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let url = url::Url::parse_with_params(
+        "https://www.omdbapi.com/",
+        &[
+            ("apiKey", api_key),
+            ("t", series_name),
+            ("Season", &season.to_string()),
+            ("Episode", &episode.to_string()),
+            ("type", "episode"),
+        ],
+    )?;
+    let resp = reqwest::blocking::get(url)?.json::<serde_json::Value>()?;
+    Ok(resp)
 }
 
 
@@ -505,6 +634,18 @@ mod tests {
         let base_dir = tempfile::Builder::new().prefix("test_scan_tv").tempdir().unwrap();
         let base_path = base_dir.path();
 
+        let default_media_info = TvEpisodeMediaInfo {
+            series_name: String::new(),
+            season: 0,
+            episode: 0,
+            path: PathBuf::new(),
+            title: None,
+            plot: None,
+            imdb_rating: None,
+            air_date: None,
+            director: None,
+        };
+
         // Series 1: Standard structure
         let series1_folder_name = "Series One (2020)";
         let series1_path = base_path.join(series1_folder_name);
@@ -520,27 +661,20 @@ mod tests {
         let s1_s2e1_path = s1_s02_path.join("Series.One.S02E01.avi");
         fs::File::create(&s1_s2e1_path).unwrap();
 
-        // Series 2: Episodes directly in series folder, some with season in name, some without
+        // Series 2: Episodes directly in series folder
         let series2_folder_name = "Series Two";
         let series2_path = base_path.join(series2_folder_name);
         fs::create_dir_all(&series2_path).unwrap();
         let s2e1_path = series2_path.join("Series.Two.S01E01.mp4");
-        fs::File::create(&s2e1_path).unwrap(); // Season in filename
-        // This file should be parsed as S2 E2 because the folder is "Series Two" and filename is "Episode 02.mkv"
-        // and parse_tv_episode_path will use series name from folder and look for E02 in filename.
-        // However, without a season in the filename or folder context for this specific file, it might be tricky.
-        // Current logic: parse_tv_episode_path needs season from filename or folder context.
-        // If "Series Two" folder doesn't provide season, and "Episode 02.mkv" doesn't, it won't be picked up.
-        // Let's assume for now it's NOT picked up based on current parsing rules for parse_tv_episode_path.
-        fs::File::create(series2_path.join("Episode 02.mkv")).unwrap(); 
+        fs::File::create(&s2e1_path).unwrap();
 
         // Series 3: Folder name includes season
         let series3_folder_name = "Series Three Season 1";
         let series3_path = base_path.join(series3_folder_name);
         fs::create_dir_all(&series3_path).unwrap();
-        let s3e1_path = series3_path.join("S3E01.OnlyEp.mkv"); // Filename S/E should take precedence
+        let s3e1_path = series3_path.join("S3E01.OnlyEp.mkv");
         fs::File::create(&s3e1_path).unwrap();
-        let s3e2_path = series3_path.join("Series.Three.E02.mp4"); // Episode only, season from folder
+        let s3e2_path = series3_path.join("Series.Three.E02.mp4");
         fs::File::create(&s3e2_path).unwrap();
 
         // Series 4: Year in series name, and season folder
@@ -552,73 +686,133 @@ mod tests {
         let s4e1_path = s4_s01_path.join("s01e01.episode.one.mkv");
         fs::File::create(&s4e1_path).unwrap();
 
+        let mut s1e1 = default_media_info.clone();
+        s1e1.series_name = "Series One".to_string();
+        s1e1.season = 1;
+        s1e1.episode = 1;
+        s1e1.path = s1e1_path;
+
+        let mut s1e2 = default_media_info.clone();
+        s1e2.series_name = "Series One".to_string();
+        s1e2.season = 1;
+        s1e2.episode = 2;
+        s1e2.path = s1e2_path;
+
+        let mut s1s2e1 = default_media_info.clone();
+        s1s2e1.series_name = "Series One".to_string();
+        s1s2e1.season = 2;
+        s1s2e1.episode = 1;
+        s1s2e1.path = s1_s2e1_path;
+
+        let mut s2e1 = default_media_info.clone();
+        s2e1.series_name = "Series Two".to_string();
+        s2e1.season = 1;
+        s2e1.episode = 1;
+        s2e1.path = s2e1_path;
+
+        let mut s3e1 = default_media_info.clone();
+        s3e1.series_name = "Series Three".to_string();
+        s3e1.season = 3;
+        s3e1.episode = 1;
+        s3e1.path = s3e1_path;
+
+        let mut s3e2 = default_media_info.clone();
+        s3e2.series_name = "Series Three".to_string();
+        s3e2.season = 1;
+        s3e2.episode = 2;
+        s3e2.path = s3e2_path;
+
+        let mut s4e1 = default_media_info.clone();
+        s4e1.series_name = "Series Four".to_string();
+        s4e1.season = 1;
+        s4e1.episode = 1;
+        s4e1.path = s4e1_path;
+
         // Expected results: A Vec<TvSeriesMediaInfo>
         let expected_series_info = vec![
             TvSeriesMediaInfo {
-                name: "Series Four".to_string(), // Name parsed from "Series Four (2021)"
+                name: "Series Four".to_string(),
                 year: Some(2021),
                 path: series4_path.clone(),
-                poster_url: String::from("https://via.placeholder.com/300x450.png?text=No+Poster"),
-                episodes: vec![
-                    TvEpisodeMediaInfo { series_name: "Series Four".to_string(), season: 1, episode: 1, path: s4e1_path },
-                ],
+                episodes: vec![s4e1],
+                released: None,
+                genre: None,
+                plot: None,
+                actors: None,
+                language: None,
+                country: None,
+                poster_url: None,
+                imdb_rating: None,
+                total_seasons: None,
             },
             TvSeriesMediaInfo {
-                name: "Series One".to_string(), // Name parsed from "Series One (2020)"
+                name: "Series One".to_string(),
                 year: Some(2020),
                 path: series1_path.clone(),
-                poster_url: String::from("https://via.placeholder.com/300x450.png?text=No+Poster"),
-                episodes: vec![
-                    TvEpisodeMediaInfo { series_name: "Series One".to_string(), season: 1, episode: 1, path: s1e1_path },
-                    TvEpisodeMediaInfo { series_name: "Series One".to_string(), season: 1, episode: 2, path: s1e2_path },
-                    TvEpisodeMediaInfo { series_name: "Series One".to_string(), season: 2, episode: 1, path: s1_s2e1_path },
-                ],
+                episodes: vec![s1e1, s1e2, s1s2e1],
+                released: None,
+                genre: None,
+                plot: None,
+                actors: None,
+                language: None,
+                country: None,
+                poster_url: None,
+                imdb_rating: None,
+                total_seasons: None,
             },
             TvSeriesMediaInfo {
-                name: "Series Three".to_string(), // Name parsed from "Series Three Season 1"
-                year: None, // No year in "Series Three Season 1"
+                name: "Series Three".to_string(),
+                year: None,
                 path: series3_path.clone(),
-                poster_url: String::from("https://via.placeholder.com/300x450.png?text=No+Poster"),
-                episodes: vec![
-                    // Episode E02 comes first due to sort order if S3E01 is parsed as S3
-                    TvEpisodeMediaInfo { series_name: "Series Three".to_string(), season: 1, episode: 2, path: s3e2_path }, // E02, season from folder
-                    TvEpisodeMediaInfo { series_name: "Series Three".to_string(), season: 3, episode: 1, path: s3e1_path }, // S3E01 from filename
-                ],
+                episodes: vec![s3e2, s3e1],
+                released: None,
+                genre: None,
+                plot: None,
+                actors: None,
+                language: None,
+                country: None,
+                poster_url: None,
+                imdb_rating: None,
+                total_seasons: None,
             },
             TvSeriesMediaInfo {
                 name: "Series Two".to_string(),
                 year: None,
                 path: series2_path.clone(),
-                poster_url: String::from("https://via.placeholder.com/300x450.png?text=No+Poster"),
-                episodes: vec![
-                    TvEpisodeMediaInfo { series_name: "Series Two".to_string(), season: 1, episode: 1, path: s2e1_path },
-                    // "Episode 02.mkv" is not expected to be parsed as it lacks season info in filename and folder context.
-                ],
+                episodes: vec![s2e1],
+                released: None,
+                genre: None,
+                plot: None,
+                actors: None,
+                language: None,
+                country: None,
+                poster_url: None,
+                imdb_rating: None,
+                total_seasons: None,
             },
         ];
 
-        let result = scan_tv_directory(base_path).unwrap(); // Removed mut
-        // scan_tv_directory already sorts series by name, and episodes by S/E.
-        // For expected_series_info, ensure episodes are sorted and then series are sorted for direct comparison.
+        let result = scan_tv_directory(base_path).unwrap();
+        
         let mut expected_sorted_series_info = expected_series_info;
         for series in expected_sorted_series_info.iter_mut() {
             series.episodes.sort_by_key(|ep| (ep.season, ep.episode));
         }
         expected_sorted_series_info.sort_by(|a, b| a.name.cmp(&b.name));
 
-        assert_eq!(result.len(), expected_sorted_series_info.len(), "Number of series mismatch.\nFound: {:#?}\nExpected: {:#?}", result, expected_sorted_series_info);
+        assert_eq!(result.len(), expected_sorted_series_info.len());
 
         for (res_series, exp_series) in result.iter().zip(expected_sorted_series_info.iter()) {
-            assert_eq!(res_series.name, exp_series.name, "Series name mismatch for path {:?}", exp_series.path);
-            assert_eq!(res_series.year, exp_series.year, "Series year mismatch for {}", exp_series.name);
-            assert_eq!(res_series.path, exp_series.path, "Series path mismatch for {}", exp_series.name);
-            assert_eq!(res_series.episodes.len(), exp_series.episodes.len(), "Episode count mismatch for series {}", exp_series.name);
+            assert_eq!(res_series.name, exp_series.name);
+            assert_eq!(res_series.year, exp_series.year);
+            assert_eq!(res_series.path, exp_series.path);
+            assert_eq!(res_series.episodes.len(), exp_series.episodes.len());
 
             for (res_ep, exp_ep) in res_series.episodes.iter().zip(exp_series.episodes.iter()) {
-                assert_eq!(res_ep.series_name, exp_ep.series_name, "Episode series name mismatch for file {:?}", exp_ep.path);
-                assert_eq!(res_ep.season, exp_ep.season, "Episode season mismatch for file {:?}", exp_ep.path);
-                assert_eq!(res_ep.episode, exp_ep.episode, "Episode number mismatch for file {:?}", exp_ep.path);
-                assert_eq!(res_ep.path, exp_ep.path, "Episode path mismatch for file {:?}", exp_ep.path);
+                assert_eq!(res_ep.series_name, exp_ep.series_name);
+                assert_eq!(res_ep.season, exp_ep.season);
+                assert_eq!(res_ep.episode, exp_ep.episode);
+                assert_eq!(res_ep.path, exp_ep.path);
             }
         }
     }

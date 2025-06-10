@@ -8,19 +8,19 @@
     <link rel="stylesheet" href="media.css">
 </head>
 <body>
-    <div class="tv-list">
+    <div class="media-list">
         <div class="media-nav">
             <a href="index.html" class="back-link">← Back to Media Collection</a>
         </div>
         <h1>TV Series Collection</h1>
-        <div class="tv-shows">
+        <div class="media-items">
             {% for series in series %}
-            <div class="tv-item">
+            <div class="media-item">
                 <a href="{{ series.page_url }}">
                     <img src="{{ series.poster_url }}" alt="{{ series.name }}" onerror="this.src='https://via.placeholder.com/300x450.png?text=No+Poster'">
-                    <div class="tv-info">
-                        <h2>{{ series.name }}{% if series.year %} ({{ series.year }}){% endif %}</h2>
-                        <p>{{ series.episodes_count }} Episodes</p>
+                    <div class="media-info">
+                        <h2 class="media-title">{{ series.name }}{% if series.year %} ({{ series.year }}){% endif %}</h2>
+                        <p class="media-meta">{{ series.episodes_count }} Episodes</p>
                     </div>
                 </a>
             </div>

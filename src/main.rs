@@ -17,7 +17,6 @@ use media::MediaInfoEquiv;
 use tv::TvSeriesMediaInfo; // Removed TvEpisodeMediaInfo import
 
 const DEFAULT_CSS_FILE: &str = include_str!("media.css");
-const DEFAULT_MEDIA_HTML_TEMPLATE: &str = include_str!("media.html");
 const DEFAULT_INDEX_HTML_TEMPLATE: &str = include_str!("index.html");
 const DEFAULT_JS_FILE: &str = include_str!("./../static/media.js");
 
@@ -110,10 +109,11 @@ fn main() {
     .get_matches();
 
     let mut template = tera::Tera::default();
-    template.add_raw_template("movie.html", DEFAULT_MEDIA_HTML_TEMPLATE).unwrap();
+    template.add_raw_template("movie.html", include_str!("movie.html")).unwrap();
     template.add_raw_template("index.html", DEFAULT_INDEX_HTML_TEMPLATE).unwrap();
     template.add_raw_template("movies.html", include_str!("movies.html")).unwrap();
     template.add_raw_template("tv.html", include_str!("tv.html")).unwrap();
+    template.add_raw_template("series.html", include_str!("series.html")).unwrap();
     let output_dir = app.get_one::<String>("output-folder").expect("Output filter required");
     let base_url = app.get_one::<String>("base-url").and_then(|s| url::Url::parse(s).ok());
     let output_path = Path::new(&output_dir);
@@ -164,16 +164,36 @@ fn main() {
         let folder = Path::new(&s_folder);
         log::info!(target: "cli", "Scanning TV folder: {:?}", folder);
 
-        match tv::scan_tv_directory(folder) { // scan_tv_directory now returns Vec<TvSeriesMediaInfo>
-            Ok(series_list) => { // series_list is Vec<TvSeriesMediaInfo>
+        match tv::scan_tv_directory(folder) {
+            Ok(series_list) => {
                 log::info!(target: "cli", "Found {} series in TV folder: {:?}", series_list.len(), folder);
-                for series_data in series_list { // series_data is TvSeriesMediaInfo
+                for mut series_data in series_list {
                     log::info!(target: "cli", "  Found Series: '{}', Year: {:?}, Path: {:?}, Episodes: {}", 
                                series_data.name, series_data.year, series_data.path, series_data.episodes.len());
-                    for episode in &series_data.episodes { // Iterate over episodes within the series
-                        log::debug!(target: "cli", "    Episode: S{:02}E{:02} - Path: {:?}", episode.season, episode.episode, episode.path);
+                    // Get OMDB data for the series
+                    if let Ok(series_info) = tv::get_series_info(omdb_api_key, &series_data.name) {
+                        // Update series metadata with OMDB data
+                        series_data.poster_url = Some(series_info.poster_url.to_string());
+                        series_data.released = Some(series_info.released);
+                        series_data.genre = Some(series_info.genre);
+                        series_data.plot = Some(series_info.plot);
+                        series_data.actors = Some(series_info.actors);
+                        series_data.language = Some(series_info.language);
+                        series_data.country = Some(series_info.country);
+                        series_data.imdb_rating = Some(series_info.imdb_rating);
+                        series_data.total_seasons = Some(series_info.total_seasons);
+                        // For each episode, get detailed info
+                        for episode in series_data.episodes.iter_mut() {
+                            if let Ok(ep_info) = tv::get_episode_info(omdb_api_key, &series_data.name, episode.season, episode.episode) {
+                                episode.title = Some(ep_info.title);
+                                episode.plot = ep_info.plot;
+                                episode.imdb_rating = ep_info.imdb_rating;
+                                episode.air_date = ep_info.aired_date;
+                                episode.director = ep_info.director;
+                            }
+                        }
                     }
-                    all_tv_series.push(series_data); // Add the TvSeriesMediaInfo struct to the list
+                    all_tv_series.push(series_data);
                 }
             }
             Err(e) => {
@@ -198,7 +218,7 @@ fn main() {
                 name: series.name.clone(),
                 year: series.year,
                 episodes_count: series.episodes.len(),
-                poster_url: series.poster_url.to_string(), // Make sure this field exists
+                poster_url: series.poster_url.as_deref().unwrap_or("https://via.placeholder.com/300x450.png?text=No+Poster").to_string(),
                 page_url: page_name,
             }
         }).collect();
@@ -221,6 +241,47 @@ fn main() {
         tv_ctx.insert("series", &tv_series_index);
         let tv_html = template.render("tv.html", &tv_ctx).unwrap();
         std::fs::write(output_path.join("tv.html"), tv_html).unwrap();
+        
+        // Generate TV series detail pages (one per series)
+        for series in &all_tv_series {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            series.path.to_str().hash(&mut hasher);
+            let page_name = hasher.finish().to_string() + ".html";
+
+            // Build SeriesPageTemplateData
+            let series_info = tv::get_series_info(omdb_api_key, &series.name).ok();
+            if let Some(series_info) = series_info {
+                // Group episodes by season
+                let mut seasons_map: std::collections::BTreeMap<u8, Vec<_>> = std::collections::BTreeMap::new();
+                for ep in &series.episodes {
+                    seasons_map.entry(ep.season).or_default().push(ep);
+                }
+                let seasons = seasons_map.into_iter().map(|(season_number, episodes)| {
+                    tv::SeasonTemplateData {
+                        season_number,
+                        episodes: episodes.iter().map(|ep| tv::EpisodeTemplateData {
+                            title: ep.title.clone().unwrap_or_default(),
+                            episode_number: ep.episode,
+                            plot: ep.plot.clone(),
+                            imdb_rating: ep.imdb_rating.clone(),
+                            aired_date: ep.air_date.clone(),
+                            director: ep.director.clone(),
+                            media_ref: String::new(), // Fill if needed
+                        }).collect(),
+                    }
+                }).collect();
+                let page_title = format!("{} ({}): Season Guide", series_info.name, series_info.year.unwrap_or_default());
+                let page_data = tv::SeriesPageTemplateData {
+                    series_info,
+                    seasons,
+                    page_title,
+                };
+                let mut ctx = tera::Context::new();
+                ctx.insert("media_info", &page_data);
+                let html = template.render("series.html", &ctx).unwrap();
+                std::fs::write(output_path.join(page_name), html).unwrap();
+            }
+        }
         
         // Write CSS and JS files
         std::fs::write(output_path.join("media.css"), DEFAULT_CSS_FILE).unwrap();
