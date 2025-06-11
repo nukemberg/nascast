@@ -507,3 +507,15 @@ body {
     letter-spacing: 0.05em;
     box-shadow: 0 2px 8px rgba(0,0,0,0.2);
 }
+
+.media-poster-placeholder {
+    width: 300px;
+    height: 450px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #e0e0e0;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    margin: 0 auto;
+}

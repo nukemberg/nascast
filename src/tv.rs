@@ -111,12 +111,10 @@ impl MediaInfoEquiv for TvEpisodeInfo {
 /// Data structure for rendering a full TV series page.
 #[derive(Serialize, Debug)]
 pub struct SeriesPageTemplateData {
-    /// OMDB-enriched details of the TV series.
-    pub series_info: TvSeriesInfo,
+    /// OMDB-enriched details of the TV series, or None if unavailable.
+    pub series_info: Option<TvSeriesInfo>,
     /// List of seasons, each containing its episodes.
     pub seasons: Vec<SeasonTemplateData>,
-    /// Title for the HTML page.
-    pub page_title: String,
 }
 
 /// Data structure for a single season within a series page template.
