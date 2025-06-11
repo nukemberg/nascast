@@ -14,7 +14,7 @@ mod media;
 mod tv; // Add tv module
 
 use media::MediaInfoEquiv;
-use tv::TvSeriesMediaInfo; // Removed TvEpisodeMediaInfo import
+use tv::{TvSeriesMediaInfo, TvSeriesInfo}; // Add TvSeriesInfo import
 
 const DEFAULT_CSS_FILE: &str = include_str!("media.css");
 const DEFAULT_INDEX_HTML_TEMPLATE: &str = include_str!("index.html");
@@ -156,8 +156,8 @@ fn main() {
         }
     }
 
-    // Changed from HashMap to Vec<TvSeriesMediaInfo>
-    let mut all_tv_series: Vec<TvSeriesMediaInfo> = Vec::new(); 
+    // Changed from HashMap to Vec<(TvSeriesMediaInfo, Option<TvSeriesInfo>)>
+    let mut all_tv_series: Vec<(TvSeriesMediaInfo, Option<TvSeriesInfo>)> = Vec::new(); 
 
     for folder_spec in app.get_many::<String>("tv-folder").unwrap_or_default() {
         let (s_folder, mount) = split_2_or(&folder_spec, None); // Now use mount for TV
@@ -170,35 +170,23 @@ fn main() {
                 for mut series_data in series_list {
                     log::info!(target: "cli", "  Found Series: '{}', Year: {:?}, Path: {:?}, Episodes: {}", 
                                series_data.name, series_data.year, series_data.path, series_data.episodes.len());
-                    // Get OMDB data for the series
-                    if let Ok(series_info) = tv::get_series_info(omdb_api_key, &series_data.name) {
+                    // Get OMDB data for the series ONCE and store Option<TvSeriesInfo>
+                    let series_info = tv::get_series_info(omdb_api_key, &series_data.name).ok();
+                    if let Some(ref info) = series_info {
                         // Update series metadata with OMDB data
-                        series_data.poster_url = Some(series_info.poster_url.to_string());
-                        series_data.released = Some(series_info.released);
-                        series_data.genre = Some(series_info.genre);
-                        series_data.plot = Some(series_info.plot);
-                        series_data.actors = Some(series_info.actors);
-                        series_data.language = Some(series_info.language);
-                        series_data.country = Some(series_info.country);
-                        series_data.imdb_rating = Some(series_info.imdb_rating);
-                        series_data.total_seasons = Some(series_info.total_seasons);
-                        // For each episode, get detailed info and set media_ref
-                        for episode in series_data.episodes.iter_mut() {
-                            if let Ok(ep_info) = tv::get_episode_info(omdb_api_key, &series_data.name, episode.season, episode.episode) {
-                                episode.title = Some(ep_info.title);
-                                episode.plot = ep_info.plot;
-                                episode.imdb_rating = ep_info.imdb_rating;
-                                episode.air_date = ep_info.aired_date;
-                                episode.director = ep_info.director;
-                            }
-                            // Set media_ref for episode
-                            let generated_ref = gen_media_ref(&base_url, folder, &mount, &episode.path);
-                            episode.media_ref = Some(generated_ref);
-                        }
+                        series_data.poster_url = Some(info.poster_url.to_string());
+                        series_data.released = Some(info.released.clone());
+                        series_data.genre = Some(info.genre.clone());
+                        series_data.plot = Some(info.plot.clone());
+                        series_data.actors = Some(info.actors.clone());
+                        series_data.language = Some(info.language.clone());
+                        series_data.country = Some(info.country.clone());
+                        series_data.imdb_rating = Some(info.imdb_rating.clone());
+                        series_data.total_seasons = Some(info.total_seasons.clone());
+                        series_data.year = info.year;
                     }
-                    // Always set media_ref for each episode, regardless of OMDB info
+                    // For each episode, get detailed info and set media_ref
                     for episode in series_data.episodes.iter_mut() {
-                        // OMDB episode enrichment (optional)
                         if let Ok(ep_info) = tv::get_episode_info(omdb_api_key, &series_data.name, episode.season, episode.episode) {
                             episode.title = Some(ep_info.title);
                             episode.plot = ep_info.plot;
@@ -210,7 +198,7 @@ fn main() {
                         let generated_ref = gen_media_ref(&base_url, folder, &mount, &episode.path);
                         episode.media_ref = Some(generated_ref);
                     }
-                    all_tv_series.push(series_data);
+                    all_tv_series.push((series_data, series_info));
                 }
             }
             Err(e) => {
@@ -227,7 +215,7 @@ fn main() {
     // Generate index pages
     if !noop {
         // Create TV series index info
-        let tv_series_index: Vec<TvSeriesIndexInfo> = all_tv_series.iter().map(|series| {
+        let tv_series_index: Vec<TvSeriesIndexInfo> = all_tv_series.iter().map(|(series, _series_info)| {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             series.path.to_str().hash(&mut hasher);
             let page_name = hasher.finish().to_string() + ".html";
@@ -260,13 +248,12 @@ fn main() {
         std::fs::write(output_path.join("tv.html"), tv_html).unwrap();
         
         // Generate TV series detail pages (one per series)
-        for series in &all_tv_series {
+        for (series, series_info) in &all_tv_series {
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             series.path.to_str().hash(&mut hasher);
             let page_name = hasher.finish().to_string() + ".html";
 
-            // Try to get OMDB info, but always generate a page
-            let series_info = tv::get_series_info(omdb_api_key, &series.name).ok();
+            // Use the OMDB info already fetched
             // Group episodes by season
             let mut seasons_map: std::collections::BTreeMap<u8, Vec<_>> = std::collections::BTreeMap::new();
             for ep in &series.episodes {
@@ -287,7 +274,7 @@ fn main() {
                 }
             }).collect();
             let page_data = tv::SeriesPageTemplateData {
-                series_info,
+                series_info: series_info.clone(),
                 seasons,
                 name: series.name.clone(),
             };
