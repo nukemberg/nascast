@@ -115,6 +115,7 @@ pub struct SeriesPageTemplateData {
     pub series_info: Option<TvSeriesInfo>,
     /// List of seasons, each containing its episodes.
     pub seasons: Vec<SeasonTemplateData>,
+    pub name: String, // Series name as detected from folder structure
 }
 
 /// Data structure for a single season within a series page template.

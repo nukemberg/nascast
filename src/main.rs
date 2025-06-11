@@ -289,6 +289,7 @@ fn main() {
             let page_data = tv::SeriesPageTemplateData {
                 series_info,
                 seasons,
+                name: series.name.clone(),
             };
             let mut ctx = tera::Context::new();
             ctx.insert("media_info", &page_data);

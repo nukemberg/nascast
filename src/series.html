@@ -10,7 +10,10 @@
 <body>
     <div class="media-details">
         <div class="media-header">
-            <h1>{% if media_info.series_info %}{{media_info.series_info.name}}{% if media_info.series_info.year %} ({{media_info.series_info.year}}){% endif %}{% endif %}</h1>
+            <h1>{% if media_info.series_info %}{{media_info.series_info.name}}{% if media_info.series_info.year %} ({{media_info.series_info.year}}){% endif %}
+                {% else %}
+                {{media_info.name}}
+                {% endif %}</h1>
             <a href="tv.html" class="back-link">← Back to TV Series</a>
         </div>
         <div class="media-content">
