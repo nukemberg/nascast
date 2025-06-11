@@ -249,16 +249,13 @@ pub fn parse_series_folder_name(folder_path: &std::path::Path) -> (Option<String
             let season_from_pattern = caps.name("season").and_then(|m| m.as_str().parse::<u8>().ok());
 
             if let Some(season_val) = season_from_pattern {
-                let series_name_str;
+                let mut series_name_str;
                 if let Some(name_match_from_season_re) = caps.name("name") {
                     series_name_str = name_match_from_season_re.as_str().replace(".", " ").trim().to_string();
                 } else {
-                    // If season pattern matched but had no "name" group (e.g. "Season 01" in "My Show Season 01")
-                    // then the name is the part of folder_name before the season match.
                     if let Some(full_season_match) = caps.get(0) {
                          series_name_str = folder_name[..full_season_match.start()].replace(".", " ").trim().to_string();
                     } else {
-                        // Fallback, should ideally not be reached if caps matched and gave a season.
                         series_name_str = name_candidate.clone();
                     }
                 }
@@ -273,13 +270,22 @@ pub fn parse_series_folder_name(folder_path: &std::path::Path) -> (Option<String
                         }
                     }
                 }
-                
-                // Per tests like `Series Name (2020) Season 1` -> name `Series Name (2020)`,
-                // the series_name_str should retain its form if it includes the year.
-                // The `parsed_year` is separate.
-
+                // --- FIX: Only strip trailing year if it is not part of the main name (not in parens, not before Sxx/Season) ---
+                if parsed_year.is_some() {
+                    // Only strip if not in parens and not immediately before Sxx/Season
+                    let paren_year_re = Regex::new(r"\(\d{4}\)").unwrap();
+                    // Check if the year is in parens in the name
+                    let year_in_parens = paren_year_re.is_match(&series_name_str);
+                    // Only keep year if it's directly before Sxx (e.g. Series.Name.2023.S01), not before 'season'
+                    let year_before_sxx_re = Regex::new(r"(?i)(\d{4})[._ ]*S\d{1,2}$").unwrap();
+                    let year_before_sxx = year_before_sxx_re.is_match(folder_name);
+                    if !year_in_parens && !year_before_sxx {
+                        if let Some(clean_caps) = name_cleaner_re.captures(&series_name_str) {
+                            series_name_str = clean_caps.get(1).map_or_else(|| series_name_str.clone(), |m| m.as_str().trim().to_string());
+                        }
+                    }
+                }
                 if series_name_str.is_empty() && folder_name.starts_with(caps.get(0).unwrap().as_str()){
-                    // Handles cases like folder being just "Season 01", where series name isn't in the folder name.
                     return (None, Some(season_val), parsed_year);
                 }
                 return (Some(series_name_str).filter(|s| !s.is_empty()), Some(season_val), parsed_year);
@@ -583,7 +589,7 @@ mod tests {
         assert_eq!(parse_series_folder_name(Path::new("Series.Name.2023.S01")), (Some("Series Name 2023".to_string()), Some(1), Some(2023)));
         assert_eq!(parse_series_folder_name(Path::new("Series Name")), (Some("Series Name".to_string()), None, None));
         assert_eq!(parse_series_folder_name(Path::new("Series Name (2020)")), (Some("Series Name".to_string()), None, Some(2020)));
-         assert_eq!(parse_series_folder_name(Path::new("tales.from.the.loop.2020.season.01")), (Some("tales from the loop 2020".to_string()), Some(1), Some(2020)));
+         assert_eq!(parse_series_folder_name(Path::new("tales.from.the.loop.2020.season.01")), (Some("tales from the loop".to_string()), Some(1), Some(2020)));
     }
 
     #[test]
