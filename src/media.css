@@ -370,65 +370,6 @@ body {
 .play-btn svg {
     vertical-align: middle;
 }
-.media-episode-link {
-    display: grid;
-    grid-template-columns: minmax(180px, 1fr) 3fr;
-    text-decoration: none;
-    color: inherit;
-    gap: 1rem;
-}
-.media-episode-thumb {
-    position: relative;
-    aspect-ratio: 16/9;
-}
-.media-episode-thumb img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-.media-episode-details {
-    padding: 1rem;
-}
-.media-episode-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 0.5rem;
-}
-.media-episode-number {
-    font-size: 0.9rem;
-    color: #666;
-    padding: 0.2rem 0.5rem;
-    background: #f1f3f5;
-    border-radius: 4px;
-}
-.media-episode-rating {
-    color: #f1c40f;
-    font-weight: bold;
-}
-.media-episode-title {
-    margin: 0 0 0.5rem 0;
-    font-size: 1.2rem;
-    color: #333;
-}
-.media-episode-date {
-    display: block;
-    font-size: 0.9rem;
-    color: #666;
-    margin-bottom: 0.5rem;
-}
-.media-episode-plot {
-    font-size: 0.95rem;
-    color: #666;
-    margin: 0.5rem 0;
-    line-height: 1.4;
-}
-.media-episode-director {
-    display: block;
-    font-size: 0.9rem;
-    color: #666;
-    margin-top: 0.5rem;
-}
 
 /* Responsive design for media pages */
 @media screen and (max-width: 1024px) {
@@ -458,15 +399,6 @@ body {
     }
     .media-content {
         grid-template-columns: 1fr;
-    }
-    .media-episode-link {
-        grid-template-columns: 1fr;
-    }
-    .media-episode-thumb {
-        aspect-ratio: 2/1;
-    }
-    .media-episode-details {
-        padding: 1rem;
     }
     .media-types {
         grid-template-columns: 1fr;
