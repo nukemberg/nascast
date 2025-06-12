@@ -12,9 +12,12 @@ extern crate lazy_static;
 mod movie;
 mod media;
 mod tv; // Add tv module
+mod cache; // Add cache module
 
 use media::MediaInfoEquiv;
-use tv::{TvSeriesMediaInfo, TvSeriesInfo}; // Add TvSeriesInfo import
+use tv::{TvSeriesMediaInfo, TvSeriesInfo};
+// Removed: use crate::movie::generate_movie_html;
+// Removed: use crate::tv::generate_tv_show_html_list;
 
 const DEFAULT_CSS_FILE: &str = include_str!("media.css");
 const DEFAULT_INDEX_HTML_TEMPLATE: &str = include_str!("index.html");
@@ -104,6 +107,7 @@ fn main() {
     .arg(clap::Arg::new("output-folder").long("output-folder").default_value("./pub"))
     .arg(clap::Arg::new("base-url").long("base-url"))
     .arg(clap::Arg::new("omdb-api-key").long("omdb-api-key"))
+    .arg(clap::Arg::new("cache-path").long("cache-path").default_value("./nascast_cache.sqlite"))
     .arg(clap::Arg::new("noop").long("noop").help("NoOp mode: only show metadata, does not write anything to disk").action(clap::ArgAction::SetTrue))
     .arg(clap::Arg::new("verbosity").long("verbosity").short('v').action(clap::ArgAction::Set))
     .get_matches();
@@ -120,6 +124,21 @@ fn main() {
     let output_path = Path::new(&output_dir);
     let omdb_api_key = app.get_one::<String>("omdb-api-key").expect("OMDB API Key required");
     let noop = app.get_flag("noop");
+    
+    // Initialize the SQLite cache
+    let cache_path_str = app.get_one::<String>("cache-path").expect("Cache path required");
+    let cache_path = Path::new(cache_path_str); // Use the string slice directly
+    let cache = match crate::cache::MediaCache::new(cache_path) {
+        Ok(c) => {
+            log::info!(target: "cli", "Media cache initialized at: {}", cache_path.display());
+            Some(c)
+        }
+        Err(err) => {
+            log::error!(target: "cli", "Failed to initialize media cache at {}: {}. Proceeding without cache.", cache_path.display(), err);
+            None
+        }
+    };
+    
     std::fs::create_dir_all(output_path).unwrap();
     
     let mut all_movies = Vec::new();
@@ -135,7 +154,7 @@ fn main() {
 
         let media_infos = scan_folders(folder).iter()
             .filter_map(|file| movie::parse_movie_filename(&movie::MOVIE_PATTERNS_RE, file))
-            .filter_map(|info| movie::get_movie_info_logged(omdb_api_key, info).ok() )
+            .filter_map(|info| movie::get_movie_info_logged(omdb_api_key, info, &cache).ok() ) // Pass cache
             .collect::<Vec<MovieInfo>>();
 
         for movie_info in media_infos {
@@ -161,18 +180,18 @@ fn main() {
     let mut all_tv_series: Vec<(TvSeriesMediaInfo, Option<TvSeriesInfo>)> = Vec::new(); 
 
     for folder_spec in app.get_many::<String>("tv-folder").unwrap_or_default() {
-        let (s_folder, mount) = split_2_or(&folder_spec, None); // Now use mount for TV
+        let (s_folder, mount) = split_2_or(&folder_spec, None);
         let folder = Path::new(&s_folder);
         log::info!(target: "cli", "Scanning TV folder: {:?}", folder);
 
         match tv::scan_tv_directory(folder) {
             Ok(series_list) => {
-                log::info!(target: "cli", "Found {} series in TV folder: {:?}", series_list.len(), folder);
+                log::info!(target: "cli", "Found {} series in TV folder: {:?}" , series_list.len(), folder);
                 for mut series_data in series_list {
                     log::info!(target: "cli", "  Found Series: '{}', Year: {:?}, Path: {:?}, Episodes: {}", 
                                series_data.name, series_data.year, series_data.path, series_data.episodes.len());
                     // Get OMDB data for the series ONCE and store Option<TvSeriesInfo>
-                    let series_info = tv::get_series_info(omdb_api_key, &series_data.name).ok();
+                    let series_info = tv::get_series_info(omdb_api_key, &series_data.name, &cache).ok(); // Pass cache
                     if let Some(ref info) = series_info {
                         // Update series metadata with OMDB data
                         series_data.poster_url = Some(info.poster_url.to_string());
@@ -188,7 +207,7 @@ fn main() {
                     }
                     // For each episode, get detailed info and set media_ref
                     for episode in series_data.episodes.iter_mut() {
-                        if let Ok(ep_info) = tv::get_episode_info(omdb_api_key, &series_data.name, episode.season, episode.episode) {
+                        if let Ok(ep_info) = tv::get_episode_info(omdb_api_key, &series_data.name, episode.season, episode.episode, &cache) { // Pass cache
                             episode.title = Some(ep_info.title);
                             episode.plot = ep_info.plot;
                             episode.imdb_rating = ep_info.imdb_rating;

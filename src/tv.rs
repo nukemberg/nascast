@@ -1,11 +1,12 @@
 use crate::media::MediaInfoEquiv; // Keep this for the trait
 use lazy_static::lazy_static;
 use regex::Regex;
-use serde::Serialize;
+use serde::{Serialize, Deserialize}; // Add Deserialize
 use std::path::{Path, PathBuf};
 use std::fs; // Added for directory reading
 use std::io; // Added for io::Error
 use url::Url;
+use crate::cache::MediaCache; // Import MediaCache
 
 /// Holds information parsed directly from a TV Series folder path.
 #[derive(Serialize, Debug, PartialEq, Clone)]
@@ -64,7 +65,7 @@ impl MediaInfoEquiv for TvEpisodeMediaInfo {
 // ---- OMDB-enriched Struct Definitions ----
 // These structs hold data after enrichment from OMDB
 
-#[derive(Serialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)] // Add Deserialize
 pub struct TvSeriesInfo {
     pub name: String,
     pub year: Option<u16>,
@@ -84,7 +85,7 @@ pub struct TvSeriesInfo {
     pub rotten_tomatoes_rating: Option<String>,
 }
 
-#[derive(Serialize, Debug, PartialEq)] // Not Cloned as per original, add if necessary
+#[derive(Serialize, Deserialize, Debug, PartialEq)] // Add Deserialize, Not Cloned as per original, add if necessary
 pub struct TvEpisodeInfo {
     pub series_name: String,
     pub season: u8,
@@ -119,16 +120,14 @@ pub struct SeriesPageTemplateData {
 }
 
 /// Data structure for a single season within a series page template.
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)] // Add Deserialize
 pub struct SeasonTemplateData {
     pub season_number: u8,
     pub episodes: Vec<EpisodeTemplateData>,
 }
 
-/// Data structure for a single episode within a series page template.
-/// This will be populated from an instance of `TvEpisodeInfo` and
-/// will include a generated media reference.
-#[derive(Serialize, Debug, Clone)]
+/// Data structure for a single episode within a season.
+#[derive(Serialize, Deserialize, Debug, Clone)] // Add Deserialize
 pub struct EpisodeTemplateData {
     /// Episode-specific title (e.g., from OMDB).
     pub title: String,
@@ -456,43 +455,30 @@ pub fn scan_tv_directory(tv_base_path: &Path) -> Result<Vec<TvSeriesMediaInfo>, 
     Ok(all_series_info)
 }
 
-pub fn get_series_info(api_key: &str, series_name: &str) -> Result<TvSeriesInfo, Box<dyn std::error::Error>> {
-    use crate::media::{OmdbType, omdb_get_metadata};
-    
-    let response = omdb_get_metadata(api_key, OmdbType::Series, series_name, None)?;
-    
-    // Convert OMDB response to TvSeriesInfo
-    match response {
-        crate::media::OmdbResponse::Series { 
-            actors, 
-            country, 
-            director, 
-            genre, 
-            language, 
-            plot, 
-            poster, 
-            rated, 
-            ratings, 
-            released, 
-            runtime, 
-            title, 
-            year, 
-            imdb_id, 
-            imdb_rating, 
-            total_seasons, 
-            .. 
-        } => {
-            let info_url = format!("https://www.imdb.com/title/{}", imdb_id);
-            let rotten_tomatoes_rating = ratings.iter()
-                .find(|r| r.source == "Rotten Tomatoes")
-                .map(|rt| rt.value.clone());
-                
-            Ok(TvSeriesInfo {
-                name: title,
-                year: year.split('–').next().and_then(|y| y.parse().ok()),
+pub fn get_series_info(
+    omdb_api_key: &str,
+    series_name: &str,
+    cache: &Option<MediaCache>,
+) -> Result<TvSeriesInfo, Box<dyn std::error::Error>> {
+    // Try to get from cache first
+    if let Some(media_cache) = cache {
+        if let Some(cached_series_info) = media_cache.get_tv_series_by_name(series_name).map_err(|e| e.to_string())? {
+            log::info!(target: "cli", "Cache hit for TV series: {}", series_name);
+            return Ok(cached_series_info);
+        }
+    }
+
+    log::info!(target: "cli", "Cache miss for TV series: {}. Fetching from OMDB.", series_name);
+    let r = crate::media::omdb_get_metadata(omdb_api_key, crate::media::OmdbType::Series, series_name, None)?;
+
+    match r {
+        crate::media::OmdbResponse::Series { .. } => {
+            let info_url = r.imdb_url();
+            if let crate::media::OmdbResponse::Series {
+                title,
+                year, // This is a String, e.g., "2008-2013" or "2008-"
                 director,
-                info_url: Url::parse(&info_url)?,
-                poster_url: Url::parse(&poster)?,
+                poster,
                 language,
                 country,
                 plot,
@@ -503,52 +489,118 @@ pub fn get_series_info(api_key: &str, series_name: &str) -> Result<TvSeriesInfo,
                 actors,
                 imdb_rating,
                 total_seasons,
-                rotten_tomatoes_rating,
-            })
-        },
-        _ => Err("Expected Series response from OMDB but got Movie".into())
+                ratings,
+                ..
+            } = r
+            {
+                let rotten_tomatoes_rating = ratings.iter()
+                    .find(|r_item| r_item.source == "Rotten Tomatoes")
+                    .map(|r_item| r_item.value.to_string());
+
+                // Safely parse the year string (e.g., "2008-2013" or "2008-") to get the start year.
+                let parsed_year: Option<u16> = year
+                    .split(|c: char| !c.is_digit(10))
+                    .next()
+                    .and_then(|s| s.parse::<u16>().ok());
+
+                let series_info = TvSeriesInfo {
+                    name: title,
+                    year: parsed_year, 
+                    director,
+                    info_url,
+                    poster_url: Url::parse(&poster)?,
+                    language,
+                    country,
+                    plot,
+                    genre,
+                    runtime,
+                    released,
+                    rated,
+                    actors,
+                    imdb_rating,
+                    total_seasons,
+                    rotten_tomatoes_rating,
+                };
+
+                // Store in cache
+                if let Some(media_cache) = cache {
+                    if let Err(e) = media_cache.store_tv_series(&series_info) {
+                        log::error!("Failed to store TV series '{}' in cache: {}", series_info.name, e);
+                    } else {
+                        log::info!(target: "cli", "Stored TV series '{}' in cache", series_info.name);
+                    }
+                }
+                Ok(series_info)
+            } else {
+                unreachable!("Should be OmdbResponse::Series variant");
+            }
+        }
+        _ => Err(format!("Unexpected OMDB response type for series: {}", series_name).into()),
     }
 }
 
-pub fn get_episode_info(api_key: &str, series_name: &str, season: u8, episode: u8) -> Result<EpisodeTemplateData, Box<dyn std::error::Error>> {
-    // Use omdb_get_metadata_with_season_episode for episode info
-    let resp = omdb_get_metadata_with_season_episode(api_key, series_name, season, episode)?;
-    
-    Ok(EpisodeTemplateData {
-        title: resp["Title"].as_str().unwrap_or_default().to_string(),
-        episode_number: episode,
-        plot: resp["Plot"].as_str()
-            .filter(|p| *p != "N/A")
-            .map(String::from),
-        imdb_rating: resp["imdbRating"].as_str()
-            .filter(|r| *r != "N/A")
-            .map(String::from),
-        aired_date: resp["Released"].as_str()
-            .filter(|d| *d != "N/A")
-            .map(String::from),
-        director: resp["Director"].as_str()
-            .filter(|d| *d != "N/A")
-            .map(String::from),
-        media_ref: String::new(), // Will be filled later
-    })
-}
+pub fn get_episode_info(
+    omdb_api_key: &str,
+    series_name: &str,
+    season: u8,
+    episode: u8,
+    cache: &Option<MediaCache>,
+) -> Result<EpisodeTemplateData, Box<dyn std::error::Error>> {
+    // Try to get from cache first
+    if let Some(media_cache) = cache {
+        if let Some(cached_episode_info) = media_cache.get_tv_episode(series_name, season, episode).map_err(|e| e.to_string())? {
+            log::info!(target: "cli", "Cache hit for TV episode: {} S{:02}E{:02}", series_name, season, episode);
+            return Ok(cached_episode_info);
+        }
+    }
 
-// Helper function to call OMDB for episode info using blocking reqwest, matching omdb_get_metadata style
-fn omdb_get_metadata_with_season_episode(api_key: &str, series_name: &str, season: u8, episode: u8) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
-    let url = url::Url::parse_with_params(
-        "https://www.omdbapi.com/",
-        &[
-            ("apiKey", api_key),
-            ("t", series_name),
-            ("Season", &season.to_string()),
-            ("Episode", &episode.to_string()),
-            ("type", "episode"),
-        ],
+    log::info!(target: "cli", "Cache miss for TV episode: {} S{:02}E{:02}. Fetching from OMDB.", series_name, season, episode);
+    // Use the new omdb_get_episode_metadata function
+    let r = crate::media::omdb_get_episode_metadata(
+        omdb_api_key,
+        series_name,
+        season,
+        episode,
     )?;
-    let resp = reqwest::blocking::get(url)?.json::<serde_json::Value>()?;
-    Ok(resp)
+
+    // The response `r` is already confirmed to be OmdbResponse::Episode by omdb_get_episode_metadata or it would have errored.
+    if let crate::media::OmdbResponse::Episode {
+        title,
+        // year, // Episode year might differ or be part of a range, handle carefully
+        plot,
+        imdb_rating,
+        released, // This is air date for episodes
+        director, // If available for episode
+        ..
+    } = r
+    {
+        let episode_data = EpisodeTemplateData {
+            title,
+            episode_number: episode,
+            plot: Some(plot),
+            imdb_rating: Some(imdb_rating),
+            aired_date: Some(released), // OMDB 'Released' is air date for episodes
+            director: Some(director), // director is String, so Some(director) is Option<String>
+            media_ref: String::new(), // This will be populated later by the caller
+        };
+
+        // Store in cache
+        if let Some(media_cache) = cache {
+            // Corrected call to store_tv_episode
+            if let Err(e) = media_cache.store_tv_episode(series_name, season, episode, &episode_data) {
+                log::error!("Failed to store TV episode '{}' S{:02}E{:02} in cache: {}", series_name, season, episode, e);
+            } else {
+                log::info!(target: "cli", "Stored TV episode '{}' S{:02}E{:02} in cache", series_name, season, episode);
+            }
+        }
+        Ok(episode_data)
+    } else {
+        // This case should ideally not be reached if omdb_get_episode_metadata works as expected (errors out if not an episode)
+        Err(format!("OMDB response was not an episode for: {} S{:02}E{:02}", series_name, season, episode).into())
+    }
 }
 
+// ---- Tests ----
 
 #[cfg(test)]
 mod tests {

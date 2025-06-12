@@ -1,4 +1,3 @@
-
 use serde::Deserialize;
 use serde_derive::Serialize;
 use reqwest;
@@ -74,7 +73,17 @@ pub enum OmdbResponse {
         #[serde(rename="imdbID")]
         imdb_id: String,
         #[serde(rename="imdbRating")]
-        imdb_rating: String    
+        imdb_rating: String,
+        #[serde(rename="BoxOffice")]
+        box_office: Option<String>,
+        #[serde(rename="DVD")]
+        dvd: Option<String>,
+        #[serde(rename="Metascore")]
+        metascore: Option<String>,
+        #[serde(rename="Production")]
+        production: Option<String>,
+        #[serde(rename="Website")]
+        website: Option<String>,
     },
     #[serde(rename="series")]
     Series {
@@ -113,7 +122,56 @@ pub enum OmdbResponse {
         #[serde(rename="imdbRating")]
         imdb_rating: String,
         #[serde(rename="totalSeasons")]
-        total_seasons: String
+        total_seasons: String,
+        #[serde(rename="Metascore")]
+        metascore: Option<String>,
+    },
+    #[serde(rename="episode")]
+    Episode {
+        #[serde(rename="Title")]
+        title: String,
+        #[serde(rename="Year")]
+        year: String,
+        #[serde(rename="Rated")]
+        rated: String,
+        #[serde(rename="Released")]
+        released: String,
+        #[serde(rename="Season")]
+        season: String,
+        #[serde(rename="Episode")]
+        episode: String,
+        #[serde(rename="Runtime")]
+        runtime: String,
+        #[serde(rename="Genre")]
+        genre: String,
+        #[serde(rename="Director")]
+        director: String,
+        #[serde(rename="Writer")]
+        writer: String,
+        #[serde(rename="Actors")]
+        actors: String,
+        #[serde(rename="Plot")]
+        plot: String,
+        #[serde(rename="Language")]
+        language: String,
+        #[serde(rename="Country")]
+        country: String,
+        #[serde(rename="Awards")]
+        awards: String,
+        #[serde(rename="Poster")]
+        poster: String,
+        #[serde(rename="Ratings")]
+        ratings: Vec<OmdbRatings>,
+        #[serde(rename="Metascore")]
+        metascore: String,
+        #[serde(rename="imdbRating")]
+        imdb_rating: String,
+        #[serde(rename="imdbVotes")]
+        imdb_votes: String,
+        #[serde(rename="imdbID")]
+        imdb_id: String,
+        #[serde(rename="seriesID")]
+        series_id: String,
     }
 }
 
@@ -123,6 +181,7 @@ impl OmdbResponse {
         let imdb_id = match self {
             OmdbResponse::Movie { imdb_id, .. } => imdb_id,
             OmdbResponse::Series { imdb_id, .. } => imdb_id,
+            OmdbResponse::Episode { imdb_id, .. } => imdb_id,
         };
         Url::parse("https://www.imdb.com/title/").unwrap().join(imdb_id).unwrap()
     }
@@ -139,7 +198,47 @@ impl std::fmt::Display for OmdbType {
 }
 
 pub fn omdb_get_metadata(omdb_api_key: &str, entity_type: OmdbType, title: &str, year: Option<u16>) -> Result<OmdbResponse, Box<dyn error::Error>> {
-    let url = Url::parse_with_params(OMDB_API_URL, &[("apiKey", omdb_api_key), ("t", title), ("y", year.map(|y| y.to_string()).unwrap_or_default().as_str()), ("type", entity_type.to_string().as_str())])?;
-    let resp = reqwest::blocking::get(url)?.json::<OmdbResponse>()?;
+    let mut params = vec![
+        ("apiKey", omdb_api_key.to_string()),
+        ("t", title.to_string()),
+        ("type", entity_type.to_string()),
+    ];
+    if let Some(y) = year {
+        params.push(("y", y.to_string()));
+    }
+
+    let client = reqwest::blocking::Client::new();
+    let resp = client.get(OMDB_API_URL)
+        .query(&params)
+        .send()?
+        .json::<OmdbResponse>()?;
     Ok(resp)
+}
+
+pub fn omdb_get_episode_metadata(
+    omdb_api_key: &str,
+    series_title: &str,
+    season: u8,
+    episode: u8,
+) -> Result<OmdbResponse, Box<dyn error::Error>> {
+    let params = vec![
+        ("apiKey", omdb_api_key.to_string()),
+        ("t", series_title.to_string()),
+        ("Season", season.to_string()),
+        ("Episode", episode.to_string()),
+        ("type", OmdbType::Episode.to_string()),
+    ];
+
+    let client = reqwest::blocking::Client::new();
+    let resp = client.get(OMDB_API_URL)
+        .query(&params)
+        .send()?
+        .json::<OmdbResponse>()?;
+
+    if let OmdbResponse::Episode { .. } = resp {
+        Ok(resp)
+    } else {
+        log::warn!(target: "cli", "OMDB did not return episode data for {} S{}E{}. Response: {:?}", series_title, season, episode, resp);
+        Err(Box::from(format!("OMDB did not return valid episode data for {} S{}E{}. Check series title, season, and episode numbers.", series_title, season, episode)))
+    }
 }

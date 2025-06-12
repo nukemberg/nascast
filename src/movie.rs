@@ -1,10 +1,13 @@
 use std::path::PathBuf;
 use regex::Regex;
 use url::Url;
-use serde_derive::Serialize;
+use serde_derive::{Serialize, Deserialize}; // Add Deserialize
 use crate::media::{omdb_get_metadata, MediaInfo, MediaInfoEquiv, OmdbResponse, OmdbType};
+use crate::cache::MediaCache; // Import MediaCache
+use std::hash::{Hash, Hasher}; // For hashing
+use std::collections::hash_map::DefaultHasher; // For hashing
 
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)] // Add Deserialize
 pub struct MovieInfo {
     pub name: String,
     pub year: u16,
@@ -58,10 +61,30 @@ pub fn parse_movie_filename(regexs: &Vec<Regex>, path: &PathBuf) -> Option<Media
     Some(MediaInfo{name: name, year: year, path: path.to_owned()})
 }
 
-pub fn get_movie_info_logged(omdb_api_key: &str, movie_file_info: MediaInfo) -> Result<MovieInfo, Box<dyn std::error::Error>> {
+pub fn get_movie_info_logged(
+    omdb_api_key: &str,
+    movie_file_info: MediaInfo,
+    cache: &Option<MediaCache>,
+) -> Result<MovieInfo, Box<dyn std::error::Error>> {
     let name = movie_file_info.name.clone();
-    let movie_info = get_movie_info(omdb_api_key, movie_file_info);
-    match movie_info {
+    let path_hash = {
+        let mut hasher = DefaultHasher::new();
+        movie_file_info.path.hash(&mut hasher);
+        hasher.finish().to_string()
+    };
+
+    // Try to get from cache first
+    if let Some(media_cache) = cache {
+        if let Some(cached_movie_info) = media_cache.get_movie_by_path_hash(&path_hash).map_err(|e| e.to_string())? {
+            log::info!(target: "cli", "Cache hit for movie (by path_hash {}): {}", path_hash, name);
+            return Ok(cached_movie_info);
+        }
+    }
+
+    log::info!(target: "cli", "Cache miss for movie (by path_hash {}): {}. Fetching from OMDB.", path_hash, name);
+    let movie_info_result = get_movie_info(omdb_api_key, movie_file_info, cache, &path_hash); // Pass cache and path_hash
+
+    match movie_info_result {
         Ok(info) => Ok(info),
         Err(err) => {
             log::warn!("Failed to get movie info for {}, error: {}", name, err);
@@ -70,17 +93,22 @@ pub fn get_movie_info_logged(omdb_api_key: &str, movie_file_info: MediaInfo) -> 
     }
 }
 
-pub fn get_movie_info(omdb_api_key: &str, movie_file_info: MediaInfo) -> Result<MovieInfo, Box<dyn std::error::Error>> {
+pub fn get_movie_info(
+    omdb_api_key: &str,
+    movie_file_info: MediaInfo,
+    cache: &Option<MediaCache>,
+    path_hash: &str, // Added path_hash parameter
+) -> Result<MovieInfo, Box<dyn std::error::Error>> {
     let r = omdb_get_metadata(omdb_api_key, OmdbType::Movie, &movie_file_info.name, movie_file_info.year)?;
     match r {
         OmdbResponse::Movie { .. } => {
             let info_url = r.imdb_url();
-            if let OmdbResponse::Movie { 
-                title, 
-                year, 
-                director, 
-                poster, 
-                language, 
+            if let OmdbResponse::Movie {
+                title,
+                year,
+                director,
+                poster,
+                language,
                 plot,
                 genre,
                 runtime,
@@ -90,12 +118,13 @@ pub fn get_movie_info(omdb_api_key: &str, movie_file_info: MediaInfo) -> Result<
                 imdb_rating,
                 ratings,
                 ..
-            } = r {
+            } = r
+            {
                 let rotten_tomatoes_rating = ratings.iter()
-                    .find(|r| r.source == "Rotten Tomatoes")
-                    .map(|r| r.value.to_string());
-                    
-                Ok(MovieInfo{
+                    .find(|r_item| r_item.source == "Rotten Tomatoes")
+                    .map(|r_item| r_item.value.to_string());
+
+                let fetched_movie_info = MovieInfo {
                     name: title,
                     year: year.parse()?,
                     director,
@@ -110,17 +139,27 @@ pub fn get_movie_info(omdb_api_key: &str, movie_file_info: MediaInfo) -> Result<
                     rated,
                     actors,
                     imdb_rating,
-                    rotten_tomatoes_rating
-                })
+                    rotten_tomatoes_rating,
+                };
+
+                // Store in cache
+                if let Some(media_cache) = cache {
+                    if let Err(e) = media_cache.store_movie(&fetched_movie_info, path_hash) {
+                        log::error!("Failed to store movie '{}' in cache: {}", fetched_movie_info.name, e);
+                    } else {
+                        log::info!(target: "cli", "Stored movie '{}' in cache (path_hash: {})", fetched_movie_info.name, path_hash);
+                    }
+                }
+                Ok(fetched_movie_info)
             } else {
                 unreachable!()
             }
-        },
-        _ => Err("Wrong OMDB response".into())
+        }
+        _ => Err("Wrong OMDB response".into()),
     }
-
 }
 
+#[cfg(test)]
 mod tests {
     use crate::movie::{parse_movie_filename, MOVIE_PATTERNS_RE};
     use crate::media::MediaInfo;
