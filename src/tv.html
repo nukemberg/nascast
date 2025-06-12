@@ -1,31 +1,25 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TV Series Collection</title>
-    <link rel="stylesheet" href="media.css">
-</head>
-<body>
-    <div class="media-list">
-        <div class="media-nav">
-            <a href="index.html" class="back-link">← Back to Media Collection</a>
-        </div>
-        <h1>TV Series Collection</h1>
-        <div class="media-items">
-            {% for series in series %}
-            <div class="media-item">
-                <a href="{{ series.page_url }}">
-                    <img src="{{ series.poster_url }}" alt="{{ series.name }}" onerror="this.src='https://via.placeholder.com/300x450.png?text=No+Poster'">
-                    <div class="media-info">
-                        <h2 class="media-title">{{ series.name }}{% if series.year %} ({{ series.year }}){% endif %}</h2>
-                        <p class="media-meta">{{ series.episodes_count }} Episodes</p>
-                    </div>
-                </a>
-            </div>
-            {% endfor %}
-        </div>
+{% extends "base.html" %}
+
+{% block title %}TV Series Collection{% endblock title %}
+
+{% block content %}
+<div class="media-list">
+    <div class="media-nav">
+        <a href="index.html" class="back-link">&larr; Back to Media Collection</a>
     </div>
-</body>
-</html>
+    <h1>TV Series Collection</h1>
+    <div class="media-items">
+        {% for series in series %}
+        <div class="media-item">
+            <a href="{{ series.page_url }}">
+                <img src="{{ series.poster_url }}" alt="{{ series.name }}" onerror="this.src='https://via.placeholder.com/300x450.png?text=No+Poster'">
+                <div class="media-info">
+                    <h2 class="media-title">{{ series.name }}{% if series.year %} ({{ series.year }}){% endif %}</h2>
+                    <p class="media-meta">{{ series.episodes_count }} Episodes</p>
+                </div>
+            </a>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock content %}

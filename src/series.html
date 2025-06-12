@@ -1,130 +1,121 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="media.css">
-    <title>{% if media_info.series_info %}{{media_info.series_info.name}} - TV Series Details{% endif %}</title>
-</head>
-<body>
-    <div class="media-details">
-        <div class="media-header">
-            <h1>{% if media_info.series_info %}{{media_info.series_info.name}}{% if media_info.series_info.year %} ({{media_info.series_info.year}}){% endif %}
+{% extends "base.html" %}
+
+{% block title %}{% if media_info.series_info %}{{media_info.series_info.name}} - TV Series Details{% else %}Series Details{% endif %}{% endblock title %}
+
+{% block content %}
+<div class="media-details">
+    <div class="media-header">
+        <h1>{% if media_info.series_info %}{{media_info.series_info.name}}{% if media_info.series_info.year %} ({{media_info.series_info.year}}){% endif %}{% else %}{{media_info.name}}{% endif %}</h1>
+        <a href="tv.html" class="back-link">&larr; Back to TV Series</a>
+    </div>
+    <div class="media-content">
+        <div class="media-poster">
+            <div class="poster-wrapper">
+                {% if media_info.series_info and media_info.series_info.poster_url %}
+                <img src="{{media_info.series_info.poster_url}}" alt="{{media_info.series_info.name}} Poster" onerror="this.src='https://via.placeholder.com/300x450.png?text=No+Poster'">
                 {% else %}
-                {{media_info.name}}
-                {% endif %}</h1>
-            <a href="tv.html" class="back-link">← Back to TV Series</a>
-        </div>
-        <div class="media-content">
-            <div class="media-poster">
-                <div class="poster-wrapper">
-                    {% if media_info.series_info and media_info.series_info.poster_url %}
-                    <img src="{{media_info.series_info.poster_url}}" alt="{{media_info.series_info.name}} Poster" onerror="this.src='https://via.placeholder.com/300x450.png?text=No+Poster'">
-                    {% else %}
-                    <div class="media-poster-placeholder">
-                        <svg width="300" height="450" viewBox="0 0 300 450" xmlns="http://www.w3.org/2000/svg">
-                            <rect width="300" height="450" fill="#e0e0e0"/>
-                            <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#888" font-size="32" font-family="Arial, sans-serif" transform="rotate(-30 150 225)">Poster unavailable</text>
-                        </svg>
-                    </div>
-                    {% endif %}
+                <div class="media-poster-placeholder">
+                    <svg width="300" height="450" viewBox="0 0 300 450" xmlns="http://www.w3.org/2000/svg">
+                        <rect width="300" height="450" fill="#e0e0e0"/>
+                        <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="#888" font-size="32" font-family="Arial, sans-serif" transform="rotate(-30 150 225)">Poster unavailable</text>
+                    </svg>
                 </div>
+                {% endif %}
             </div>
-            <div class="media-info-details">
-                <div class="metadata">
-                    {% if not media_info.series_info %}
-                        <div class="omdb-unavailable">OMDB information unavailable for this series.</div>
+        </div>
+        <div class="media-info-details">
+            <div class="metadata">
+                {% if not media_info.series_info %}
+                    <div class="omdb-unavailable">OMDB information unavailable for this series.</div>
+                {% else %}
+                <div class="media-header-details">
+                    <div class="media-header-row">
+                        <div class="rating-badge">{% if media_info.series_info.rated %}{{media_info.series_info.rated}}{% else %}N/A{% endif %}</div>
+                        <span class="released-label">Released: {% if media_info.series_info.released %}{{media_info.series_info.released}}{% else %}N/A{% endif %}</span>
+                        {% if media_info.series_info.imdb_rating %}
+                        <div class="imdb-rating">{% if media_info.series_info.info_url %}<a href="{{media_info.series_info.info_url}}" target="_blank">{% endif %}
+                            <span class="imdb-logo">IMDb</span> {{media_info.series_info.imdb_rating}}/10{% if media_info.series_info.info_url %}</a>{% endif %}
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="genre-tags">
+                    {% if media_info.series_info.genre %}
+                    {% set genres = media_info.series_info.genre | split(pat=", ") %}
+                    {% for genre in genres %}
+                    <span class="genre-tag">{{genre}}</span>
+                    {% endfor %}
                     {% else %}
-                    <div class="media-header-details">
-                        <div class="media-header-row">
-                            <div class="rating-badge">{% if media_info.series_info.rated %}{{media_info.series_info.rated}}{% else %}N/A{% endif %}</div>
-                            <span class="released-label">Released: {% if media_info.series_info.released %}{{media_info.series_info.released}}{% else %}N/A{% endif %}</span>
-                            {% if media_info.series_info.imdb_rating %}
-                            <div class="imdb-rating">{% if media_info.series_info.info_url %}<a href="{{media_info.series_info.info_url}}" target="_blank">{% endif %}
-                                <span class="imdb-logo">IMDb</span> {{media_info.series_info.imdb_rating}}/10{% if media_info.series_info.info_url %}</a>{% endif %}
-                            </div>
-                            {% endif %}
-                        </div>
-                    </div>
-                    <div class="genre-tags">
-                        {% if media_info.series_info.genre %}
-                        {% set genres = media_info.series_info.genre | split(pat=", ") %}
-                        {% for genre in genres %}
-                        <span class="genre-tag">{{genre}}</span>
-                        {% endfor %}
-                        {% else %}
-                        <span class="genre-tag">N/A</span>
-                        {% endif %}
-                    </div>
-                    {% if media_info.series_info.plot %}
-                    <div class="plot">{{media_info.series_info.plot}}</div>
-                    {% endif %}
-                    <div class="info-grid">
-                        {% if media_info.series_info.actors %}
-                        <div class="info-item">
-                            <span class="label">Cast</span>
-                            <div class="cast-list">
-                                {% set actors = media_info.series_info.actors | split(pat=", ") %}
-                                {% for actor in actors %}
-                                <span class="actor">{{actor}}</span>
-                                {% endfor %}
-                            </div>
-                        </div>
-                        {% endif %}
-                        {% if media_info.series_info.language %}
-                        <div class="info-item">
-                            <span class="label">Language</span>
-                            <span>{{media_info.series_info.language}}</span>
-                        </div>
-                        {% endif %}
-                        {% if media_info.series_info.country %}
-                        <div class="info-item">
-                            <span class="label">Country</span>
-                            <span>{{media_info.series_info.country}}</span>
-                        </div>
-                        {% endif %}
-                        {% if media_info.series_info.total_seasons %}
-                        <div class="info-item">
-                            <span class="label">Seasons</span>
-                            <span>{{media_info.series_info.total_seasons}}</span>
-                        </div>
-                        {% endif %}
-                    </div>
+                    <span class="genre-tag">N/A</span>
                     {% endif %}
                 </div>
-                <div class="media-episodes-section">
-                    <h2>Episodes</h2>
-                    {% for season in media_info.seasons %}
-                    <div class="media-season-block">
-                        <h3>Season {{season.season_number}}</h3>
-                        <div class="media-episode-list">
-                            {% for episode in season.episodes %}
-                            <div class="media-episode-item">
-                                <a href="{{episode.media_ref}}" class="media-episode-play-btn play-btn-link" title="Play Episode">
-                                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                        <circle cx="16" cy="16" r="16" fill="#222"/>
-                                        <polygon points="12,9 25,16 12,23" fill="#fff"/>
-                                    </svg>
-                                </a>
-                                <div class="media-episode-info">
-                                    <div class="media-episode-title">{{episode.title}}</div>
-                                    <div class="media-episode-meta">
-                                        <span class="media-episode-number">E{{episode.episode_number}}</span>
-                                        {% if episode.imdb_rating %}<span class="media-episode-rating">★ {{episode.imdb_rating}}</span>{% endif %}
-                                        {% if episode.aired_date %}<span class="media-episode-date">{{episode.aired_date}}</span>{% endif %}
-                                    </div>
-                                    {% if episode.plot %}<div class="media-episode-plot">{{episode.plot}}</div>{% endif %}
-                                    {% if episode.director %}<div class="media-episode-director">Directed by {{episode.director}}</div>{% endif %}
-                                </div>
-                            </div>
+                {% if media_info.series_info.plot %}
+                <div class="plot">{{media_info.series_info.plot}}</div>
+                {% endif %}
+                <div class="info-grid">
+                    {% if media_info.series_info.actors %}
+                    <div class="info-item">
+                        <span class="label">Cast</span>
+                        <div class="cast-list">
+                            {% set actors = media_info.series_info.actors | split(pat=", ") %}
+                            {% for actor in actors %}
+                            <span class="actor">{{actor}}</span>
                             {% endfor %}
                         </div>
                     </div>
-                    {% endfor %}
+                    {% endif %}
+                    {% if media_info.series_info.language %}
+                    <div class="info-item">
+                        <span class="label">Language</span>
+                        <span>{{media_info.series_info.language}}</span>
+                    </div>
+                    {% endif %}
+                    {% if media_info.series_info.country %}
+                    <div class="info-item">
+                        <span class="label">Country</span>
+                        <span>{{media_info.series_info.country}}</span>
+                    </div>
+                    {% endif %}
+                    {% if media_info.series_info.total_seasons %}
+                    <div class="info-item">
+                        <span class="label">Seasons</span>
+                        <span>{{media_info.series_info.total_seasons}}</span>
+                    </div>
+                    {% endif %}
                 </div>
+                {% endif %}
+            </div>
+            <div class="media-episodes-section">
+                <h2>Episodes</h2>
+                {% for season in media_info.seasons %}
+                <div class="media-season-block">
+                    <h3>Season {{season.season_number}}</h3>
+                    <div class="media-episode-list">
+                        {% for episode in season.episodes %}
+                        <div class="media-episode-item">
+                            <a href="{{episode.media_ref}}" class="media-episode-play-btn play-btn-link" title="Play Episode">
+                                <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <circle cx="16" cy="16" r="16" fill="#222"/>
+                                    <polygon points="12,9 25,16 12,23" fill="#fff"/>
+                                </svg>
+                            </a>
+                            <div class="media-episode-info">
+                                <div class="media-episode-title">{{episode.title}}</div>
+                                <div class="media-episode-meta">
+                                    <span class="media-episode-number">E{{episode.episode_number}}</span>
+                                    {% if episode.imdb_rating %}<span class="media-episode-rating">&#9733; {{episode.imdb_rating}}</span>{% endif %}
+                                    {% if episode.aired_date %}<span class="media-episode-date">{{episode.aired_date}}</span>{% endif %}
+                                </div>
+                                {% if episode.plot %}<div class="media-episode-plot">{{episode.plot}}</div>{% endif %}
+                                {% if episode.director %}<div class="media-episode-director">Directed by {{episode.director}}</div>{% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endfor %}
             </div>
         </div>
     </div>
-</body>
-</html>
+</div>
+{% endblock content %}

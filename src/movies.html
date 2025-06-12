@@ -1,31 +1,25 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Movie Collection</title>
-    <link rel="stylesheet" href="media.css">
-</head>
-<body>
-    <div class="media-list">
-        <div class="media-nav">
-            <a href="index.html" class="back-link">← Back to Media Collection</a>
-        </div>
-        <h1>Movie Collection</h1>
-        <div class="media-items">
-            {% for movie in movies %}
-            <div class="media-item">
-                <a href="{{ movie.page_url }}">
-                    <img src="{{ movie.poster_url }}" alt="{{ movie.name }}" onerror="this.src='https://via.placeholder.com/300x450.png?text=No+Poster'">
-                    <div class="media-info">
-                        <h2 class="media-title">{{ movie.name }} ({{ movie.year }})</h2>
-                        <p class="media-meta">{{ movie.director }}</p>
-                    </div>
-                </a>
-            </div>
-            {% endfor %}
-        </div>
+{% extends "base.html" %}
+
+{% block title %}Movie Collection{% endblock title %}
+
+{% block content %}
+<div class="media-list">
+    <div class="media-nav">
+        <a href="index.html" class="back-link">&larr; Back to Media Collection</a>
     </div>
-</body>
-</html>
+    <h1>Movie Collection</h1>
+    <div class="media-items">
+        {% for movie in movies %}
+        <div class="media-item">
+            <a href="{{ movie.page_url }}">
+                <img src="{{ movie.poster_url }}" alt="{{ movie.name }}" onerror="this.src='https://via.placeholder.com/300x450.png?text=No+Poster'">
+                <div class="media-info">
+                    <h2 class="media-title">{{ movie.name }} ({{ movie.year }})</h2>
+                    <p class="media-meta">{{ movie.director }}</p>
+                </div>
+            </a>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock content %}

@@ -109,6 +109,7 @@ fn main() {
     .get_matches();
 
     let mut template = tera::Tera::default();
+    template.add_raw_template("base.html", include_str!("base.html")).unwrap();
     template.add_raw_template("movie.html", include_str!("movie.html")).unwrap();
     template.add_raw_template("index.html", DEFAULT_INDEX_HTML_TEMPLATE).unwrap();
     template.add_raw_template("movies.html", include_str!("movies.html")).unwrap();
