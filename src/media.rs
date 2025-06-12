@@ -37,6 +37,7 @@ pub struct OmdbRatings {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all(deserialize="PascalCase"), tag="Type")]
+#[allow(dead_code)]
 pub enum OmdbResponse {
     #[serde(rename="movie")]
     Movie {
