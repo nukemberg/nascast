@@ -13,15 +13,18 @@ mod movie;
 mod media;
 mod tv; // Add tv module
 mod cache; // Add cache module
+mod search; // Add search module
 
 use media::MediaInfoEquiv;
 use tv::{TvSeriesMediaInfo, TvSeriesInfo};
+use search::{SearchIndex, SearchIndexEntry, generate_id, build_meta_string};
 // Removed: use crate::movie::generate_movie_html;
 // Removed: use crate::tv::generate_tv_show_html_list;
 
 const DEFAULT_CSS_FILE: &str = include_str!("media.css");
 const DEFAULT_INDEX_HTML_TEMPLATE: &str = include_str!("index.html");
 const DEFAULT_JS_FILE: &str = include_str!("./../static/media.js");
+const DEFAULT_SEARCH_JS_FILE: &str = include_str!("./../static/search.js");
 
 fn scan_folders(basepath: &Path) -> Vec<std::path::PathBuf> {
     walkdir::WalkDir::new(basepath)
@@ -142,6 +145,7 @@ fn main() {
     std::fs::create_dir_all(output_path).unwrap();
     
     let mut all_movies = Vec::new();
+    let mut all_movie_infos = Vec::new(); // For search index generation
     
     for folder_spec in app.get_many::<String>("movies-folder").unwrap_or_default() {
         let (s_folder, mount) = split_2_or(&folder_spec, None);
@@ -169,6 +173,9 @@ fn main() {
                 poster_url: movie_info.poster_url.to_string(),
                 page_url: page_name,
             });
+
+            // Store for search index
+            all_movie_infos.push(movie_info.clone());
 
             if !noop {
                 render(movie_info);
@@ -304,9 +311,128 @@ fn main() {
             std::fs::write(output_path.join(page_name), html).unwrap();
         }
         
+        // Generate search index
+        let mut search_index = SearchIndex::new();
+        
+        // Add movies to search index
+        for movie in &all_movies {
+            // Find the corresponding MovieInfo to get metadata
+            let movie_metadata = all_movie_infos.iter().find(|m| m.name == movie.name && m.year == movie.year);
+            
+            let meta = if let Some(movie_info) = movie_metadata {
+                build_meta_string(
+                    Some(&movie_info.genre),
+                    Some(&movie_info.actors),
+                    Some(&movie_info.director),
+                    None // Movies don't typically have separate writer field in our data
+                )
+            } else {
+                build_meta_string(
+                    None,
+                    None,
+                    Some(&movie.director),
+                    None
+                )
+            };
+            
+            search_index.add_entry(SearchIndexEntry {
+                id: generate_id(&std::path::PathBuf::from(&movie.name), "movie"),
+                title: format!("{} ({})", movie.name, movie.year),
+                year: Some(movie.year),
+                media_type: "movie".to_string(),
+                url: movie.page_url.clone(),
+                poster_url: movie.poster_url.clone(),
+                meta,
+            });
+        }
+        
+        // Add TV series to search index
+        for series_index in &tv_series_index {
+            // Find the corresponding series info for metadata
+            let series_data = all_tv_series.iter().find(|(s, _)| s.name == series_index.name);
+            
+            let meta = if let Some((series, Some(series_info))) = series_data {
+                build_meta_string(
+                    series.genre.as_deref(),
+                    series.actors.as_deref(),
+                    Some(&series_info.director),
+                    None
+                )
+            } else if let Some((series, None)) = series_data {
+                build_meta_string(
+                    series.genre.as_deref(),
+                    series.actors.as_deref(),
+                    None,
+                    None
+                )
+            } else {
+                String::new()
+            };
+            
+            let title = if let Some(year) = series_index.year {
+                format!("{} ({})", series_index.name, year)
+            } else {
+                series_index.name.clone()
+            };
+            
+            search_index.add_entry(SearchIndexEntry {
+                id: generate_id(&std::path::PathBuf::from(&series_index.name), "series"),
+                title,
+                year: series_index.year,
+                media_type: "series".to_string(),
+                url: series_index.page_url.clone(),
+                poster_url: series_index.poster_url.clone(),
+                meta,
+            });
+        }
+        
+        // Add episodes to search index
+        for (series, _series_info) in &all_tv_series {
+            for episode in &series.episodes {
+                let meta = build_meta_string(
+                    None, // Episodes don't have genre
+                    None, // Episodes don't have separate actors
+                    episode.director.as_deref(),
+                    None  // Could add writer if available in episode data
+                );
+                
+                let title = format!("{} - {} S{:02}E{:02}{}", 
+                    series.name, 
+                    series.name,
+                    episode.season, 
+                    episode.episode,
+                    episode.title.as_ref().map(|t| format!(": {}", t)).unwrap_or_default()
+                );
+                
+                search_index.add_entry(SearchIndexEntry {
+                    id: generate_id(&episode.path, "episode"),
+                    title,
+                    year: series.year,
+                    media_type: "episode".to_string(),
+                    url: format!("{}#{}-s{}e{}", 
+                        // Use the series page URL and add anchor
+                        tv_series_index.iter()
+                            .find(|s| s.name == series.name)
+                            .map(|s| s.page_url.clone())
+                            .unwrap_or_default(),
+                        series.name.to_lowercase().replace(" ", "-"),
+                        episode.season,
+                        episode.episode
+                    ),
+                    poster_url: series.poster_url.as_deref().unwrap_or("https://via.placeholder.com/300x450.png?text=No+Poster").to_string(),
+                    meta,
+                });
+            }
+        }
+        
+        // Write search index to file
+        let search_index_json = serde_json::to_string_pretty(&search_index).unwrap();
+        std::fs::write(output_path.join("search-index.json"), search_index_json).unwrap();
+        
         // Write CSS and JS files
         std::fs::write(output_path.join("media.css"), DEFAULT_CSS_FILE).unwrap();
         std::fs::write(output_path.join("media.js"), DEFAULT_JS_FILE).unwrap();
+        std::fs::write(output_path.join("search.js"), DEFAULT_SEARCH_JS_FILE).unwrap();
     }
 }
 

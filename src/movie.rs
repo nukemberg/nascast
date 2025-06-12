@@ -7,7 +7,7 @@ use crate::cache::MediaCache; // Import MediaCache
 use std::hash::{Hash, Hasher}; // For hashing
 use std::collections::hash_map::DefaultHasher; // For hashing
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)] // Add Deserialize
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)] // Add Deserialize and Clone
 pub struct MovieInfo {
     pub name: String,
     pub year: u16,
