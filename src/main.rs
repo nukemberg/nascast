@@ -124,7 +124,7 @@ fn main() {
             .about("Start a web server to serve the generated content")
             .arg(clap::Arg::new("movies-folder").long("movies-folder").action(clap::ArgAction::Append))
             .arg(clap::Arg::new("tv-folder").long("tv-folder").action(clap::ArgAction::Append))
-            .arg(clap::Arg::new("output-folder").long("output-folder").default_value("./pub"))
+            .arg(clap::Arg::new("html-folder").long("html-folder").default_value("./pub"))
             .arg(clap::Arg::new("base-url").long("base-url"))
             .arg(clap::Arg::new("port").long("port").default_value("8000").help("Port to run the web server on"))
     )
@@ -132,16 +132,16 @@ fn main() {
     
     match matches.subcommand() {
         Some(("webserver", webserver_matches)) => {
-            let output_dir = webserver_matches.get_one::<String>("output-folder").expect("Output folder required").to_string();
+            let html_dir = webserver_matches.get_one::<String>("html-folder").expect("HTML folder required").to_string();
             let port = webserver_matches.get_one::<String>("port").expect("Port required").parse::<u16>().expect("Port must be a number");
             
             // If any folders are specified, first generate the content
             let movies_folders = webserver_matches.get_many::<String>("movies-folder").unwrap().map(|s| split_2_or(s, None)).collect();
             let tv_folders = webserver_matches.get_many::<String>("tv-folder").unwrap().map(|s| split_2_or(s, None)).collect();
-            let _base_url = webserver_matches.get_one::<String>("base-url").and_then(|s| url::Url::parse(s).ok());
+            let base_url = webserver_matches.get_one::<String>("base-url").and_then(|s| url::Url::parse(s).ok());
                         
             // Start the web server
-            if let Err(e) = start_webserver(output_dir, tv_folders, movies_folders, port) {
+            if let Err(e) = start_webserver(html_dir, tv_folders, movies_folders, port, base_url) {
                 log::error!(target: "cli", "Failed to start web server: {}", e);
             }
         },
@@ -478,8 +478,8 @@ fn generate_content(app: &clap::ArgMatches) {
 }
 
 // Function to start the web server
-fn start_webserver(html_dir: String, tv_folders: Vec<(String, String)>, movies_folder: Vec<(String, String)>, port: u16) -> std::io::Result<()> {
-    use rouille::{Response, router};
+fn start_webserver(html_dir: String, tv_folders: Vec<(String, String)>, movies_folder: Vec<(String, String)>, port: u16, base_url: Option<url::Url>) -> std::io::Result<()> {
+    use rouille::Response;
     use std::path::PathBuf;
     
     log::info!(target: "cli", "Starting web server on port {} serving files from {}", port, html_dir);
@@ -487,16 +487,34 @@ fn start_webserver(html_dir: String, tv_folders: Vec<(String, String)>, movies_f
     let html_dir_path = PathBuf::from(html_dir);
     let address = format!("127.0.0.1:{}", port);
     
+    // Determine the base path from base_url
+    let base_path = if let Some(ref url) = base_url {
+        url.path().trim_end_matches('/').to_string()
+    } else {
+        String::new()
+    };
+    
     // Rouille's start_server doesn't return, so we don't need to handle the result
     println!("Starting web server at http://{}", address);
     rouille::start_server(address, move |request| {
         log::info!(target: "cli", "{} {}", request.method(), request.url());
+        
+        // Strip base path from request URL if it exists
+        let request_url = request.url();
+        let request_path = if !base_path.is_empty() && request_url.starts_with(&base_path) {
+            &request_url[base_path.len()..]
+        } else if base_path.is_empty() {
+            &request_url
+        } else {
+            // Request doesn't match base path, return 404
+            return Response::html("Not found").with_status_code(404);
+        };
 
         // First try to handle media folders
         for (folder, mount) in &movies_folder {
             let mount_str = format!("/{}", mount);
-            if request.url().starts_with(&mount_str) {
-                let rel_path = &request.url()[mount_str.len()..];
+            if request_path.starts_with(&mount_str) {
+                let rel_path = &request_path[mount_str.len()..];
                 let file_path = PathBuf::from(folder).join(rel_path.trim_start_matches('/'));
                 if file_path.exists() {
                     // Use mime_guess to determine content type
@@ -509,8 +527,8 @@ fn start_webserver(html_dir: String, tv_folders: Vec<(String, String)>, movies_f
         // Then try TV folders
         for (folder, mount) in &tv_folders {
             let mount_str = format!("/{}", mount);
-            if request.url().starts_with(&mount_str) {
-                let rel_path = &request.url()[mount_str.len()..];
+            if request_path.starts_with(&mount_str) {
+                let rel_path = &request_path[mount_str.len()..];
                 let file_path = PathBuf::from(folder).join(rel_path.trim_start_matches('/'));
                 if file_path.exists() {
                     // Use mime_guess to determine content type
@@ -520,9 +538,9 @@ fn start_webserver(html_dir: String, tv_folders: Vec<(String, String)>, movies_f
             }
         }
         
-        // Finally serve the static HTML files
-        router!(request,
-            (GET) ["/"] => {
+        // Finally serve the static HTML files using the stripped request path
+        match request_path {
+            "/" => {
                 let index_path = html_dir_path.join("index.html");
                 if index_path.exists() {
                     Response::from_file("text/html", std::fs::File::open(index_path).unwrap())
@@ -530,37 +548,37 @@ fn start_webserver(html_dir: String, tv_folders: Vec<(String, String)>, movies_f
                     Response::text("Index file not found").with_status_code(404)
                 }
             },
-            (GET) ["/media.css"] => {
+            "/media.css" => {
                 Response::from_file("text/css", std::fs::File::open(html_dir_path.join("media.css")).unwrap())
             },
-            (GET) ["/media.js"] => {
+            "/media.js" => {
                 Response::from_file("application/javascript", std::fs::File::open(html_dir_path.join("media.js")).unwrap())
             },
-            (GET) ["/search.js"] => {
+            "/search.js" => {
                 Response::from_file("application/javascript", std::fs::File::open(html_dir_path.join("search.js")).unwrap())
             },
-            (GET) ["/search-index.json"] => {
+            "/search-index.json" => {
                 Response::from_file("application/json", std::fs::File::open(html_dir_path.join("search-index.json")).unwrap())
             },
-            (GET) ["/movies.html"] => {
+            "/movies.html" => {
                 Response::from_file("text/html", std::fs::File::open(html_dir_path.join("movies.html")).unwrap())
             },
-            (GET) ["/tv.html"] => {
+            "/tv.html" => {
                 Response::from_file("text/html", std::fs::File::open(html_dir_path.join("tv.html")).unwrap())
             },
             // Fallback for other HTML files (media pages)
             _ => {
-                let path = html_dir_path.join(request.url().trim_start_matches('/'));
+                let path = html_dir_path.join(request_path.trim_start_matches('/'));
                 if path.exists() && path.is_file() {
                     // Use mime_guess to determine content type
                     let mime = mime_guess::from_path(&path).first_or_octet_stream().to_string();
                     Response::from_file(mime, std::fs::File::open(path).unwrap())
                 } else {
-                    log::info!(target: "cli", "404 for path: {}", request.url());
+                    log::info!(target: "cli", "404 for path: {}", request_path);
                     Response::html("Not found").with_status_code(404)
                 }
             }
-        )
+        }
     });
     
     // This function never actually returns because start_server blocks indefinitely

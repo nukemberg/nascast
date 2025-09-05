@@ -5,6 +5,11 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[lints.rust]
+# Suppress warnings from dependencies about trailing semicolons in macros
+# This is a future incompatibility warning in buf_redux and multipart dependencies
+semicolon-in-expressions-from-macros = "allow"
+
 [dependencies]
 clap = "4.1.4"
 lazy_static = "1.4.0"
