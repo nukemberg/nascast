@@ -9,6 +9,10 @@ use log;
 #[macro_use]
 extern crate lazy_static;
 
+// Web server imports
+extern crate actix_web;
+extern crate actix_files;
+
 mod movie;
 mod media;
 mod tv; // Add tv module
@@ -104,17 +108,64 @@ fn main() {
         .build(log4rs::config::Root::builder().appender("stdout").build(log::LevelFilter::Warn)).unwrap();
     let _log_config_handle = log4rs::init_config(log_config).unwrap();
     
-    let app = clap::Command::new("nascast")
-    .arg(clap::Arg::new("movies-folder").long("movies-folder").action(clap::ArgAction::Append))
-    .arg(clap::Arg::new("tv-folder").long("tv-folder").action(clap::ArgAction::Append))
-    .arg(clap::Arg::new("output-folder").long("output-folder").default_value("./pub"))
-    .arg(clap::Arg::new("base-url").long("base-url"))
-    .arg(clap::Arg::new("omdb-api-key").long("omdb-api-key"))
-    .arg(clap::Arg::new("cache-path").long("cache-path").default_value("./nascast_cache.sqlite"))
-    .arg(clap::Arg::new("noop").long("noop").help("NoOp mode: only show metadata, does not write anything to disk").action(clap::ArgAction::SetTrue))
-    .arg(clap::Arg::new("verbosity").long("verbosity").short('v').action(clap::ArgAction::Set))
+    let matches = clap::Command::new("nascast")
+    .about("NASCast: A tool for generating HTML pages from movies and TV shows for streaming")
+    .subcommand_required(true)
+    .subcommand(
+        clap::Command::new("index")
+            .about("Generate HTML pages from movies and TV shows")
+            .arg(clap::Arg::new("movies-folder").long("movies-folder").action(clap::ArgAction::Append))
+            .arg(clap::Arg::new("tv-folder").long("tv-folder").action(clap::ArgAction::Append))
+            .arg(clap::Arg::new("output-folder").long("output-folder").default_value("./pub"))
+            .arg(clap::Arg::new("base-url").long("base-url"))
+            .arg(clap::Arg::new("omdb-api-key").long("omdb-api-key").required(true))
+            .arg(clap::Arg::new("cache-path").long("cache-path").default_value("./nascast_cache.sqlite"))
+            .arg(clap::Arg::new("noop").long("noop").help("NoOp mode: only show metadata, does not write anything to disk").action(clap::ArgAction::SetTrue))
+            .arg(clap::Arg::new("verbosity").long("verbosity").short('v').action(clap::ArgAction::Set))
+    )
+    .subcommand(
+        clap::Command::new("webserver")
+            .about("Start a web server to serve the generated content")
+            .arg(clap::Arg::new("movies-folder").long("movies-folder").action(clap::ArgAction::Append))
+            .arg(clap::Arg::new("tv-folder").long("tv-folder").action(clap::ArgAction::Append))
+            .arg(clap::Arg::new("output-folder").long("output-folder").default_value("./pub"))
+            .arg(clap::Arg::new("base-url").long("base-url"))
+            .arg(clap::Arg::new("port").long("port").default_value("8000").help("Port to run the web server on"))
+    )
     .get_matches();
+    
+    match matches.subcommand() {
+        Some(("webserver", webserver_matches)) => {
+            let output_dir = webserver_matches.get_one::<String>("output-folder").expect("Output folder required").to_string();
+            let port = webserver_matches.get_one::<String>("port").expect("Port required").parse::<u16>().expect("Port must be a number");
+            
+            // If any folders are specified, first generate the content
+            let movies_folders = webserver_matches.get_many::<String>("movies-folder").unwrap().map(|s| split_2_or(s, None)).collect();
+            let tv_folders = webserver_matches.get_many::<String>("tv-folder").unwrap().map(|s| split_2_or(s, None)).collect();
+            let _base_url = webserver_matches.get_one::<String>("base-url").and_then(|s| url::Url::parse(s).ok());
+                        
+            // Start the web server
+            let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            if let Err(e) = runtime.block_on(start_webserver(output_dir, tv_folders, movies_folders, port)) {
+                log::error!(target: "cli", "Failed to start web server: {}", e);
+            }
+        },
+        Some(("index", index_matches)) => {
+            // Original command processing moved here for the index subcommand
+            // Process the index command with the content generation logic
+            generate_content(index_matches);
+        },
+        _ => {
+            // This should not happen because of subcommand_required(true),
+            // but handle it just in case
+            eprintln!("No subcommand was provided");
+            std::process::exit(1);
+        }
+    }
+}
 
+// Function for content generation (the index subcommand)
+fn generate_content(app: &clap::ArgMatches) {
     let mut template = tera::Tera::default();
     template.add_raw_template("base.html", include_str!("base.html")).unwrap();
     template.add_raw_template("movie.html", include_str!("movie.html")).unwrap();
@@ -122,7 +173,7 @@ fn main() {
     template.add_raw_template("movies.html", include_str!("movies.html")).unwrap();
     template.add_raw_template("tv.html", include_str!("tv.html")).unwrap();
     template.add_raw_template("series.html", include_str!("series.html")).unwrap();
-    let output_dir = app.get_one::<String>("output-folder").expect("Output filter required");
+    let output_dir = app.get_one::<String>("output-folder").expect("Output folder required");
     let base_url = app.get_one::<String>("base-url").and_then(|s| url::Url::parse(s).ok());
     let output_path = Path::new(&output_dir);
     let omdb_api_key = app.get_one::<String>("omdb-api-key").expect("OMDB API Key required");
@@ -233,11 +284,6 @@ fn main() {
             }
         }
     }
-
-    // Log the collected series information (optional, already logged above)
-    // for series_data in &all_tv_series {
-    //     log::info!(target: "cli", "Collected Series: '{}', Episodes: {}", series_data.name, series_data.episodes.len());
-    // }
 
     // Generate index pages
     if !noop {
@@ -436,6 +482,39 @@ fn main() {
     }
 }
 
+// Function to start the web server
+async fn start_webserver(html_dir: String, tv_folders: Vec<(String, String)>, movies_folder: Vec<(String, String)>, port: u16) -> std::io::Result<()> {
+    use actix_web::{web, App, HttpServer, HttpResponse, middleware, HttpRequest};
+    use actix_files as fs;
+    
+    log::info!(target: "cli", "Starting web server on port {} serving files from {}", port, html_dir);
+    
+    HttpServer::new(move || {
+        let output_dir = html_dir.clone();
+        let mut app = App::new()
+            .wrap(middleware::Logger::default());
+
+        for (folder, mount) in &movies_folder {
+            app = app.service(fs::Files::new(mount.as_str(), folder.as_str()).show_files_listing());
+        }
+        for (folder, mount) in &tv_folders {
+            app = app.service(fs::Files::new(mount.as_str(), folder.as_str()).show_files_listing());
+        }
+        app = app.service(
+                fs::Files::new("/", output_dir)
+                    .index_file("index.html")
+                    .use_last_modified(true)
+            )
+            .default_service(web::to(|req: HttpRequest| async move {
+                log::info!(target: "cli", "404 for path: {}", req.path());
+                HttpResponse::NotFound().body("Not found")
+            }));
+        app
+    })
+    .bind(format!("127.0.0.1:{}", port))?
+    .run()
+    .await
+}
 
 #[cfg(test)]
 mod tests {
