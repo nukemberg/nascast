@@ -9,10 +9,6 @@ use log;
 #[macro_use]
 extern crate lazy_static;
 
-// Web server imports
-extern crate actix_web;
-extern crate actix_files;
-
 mod movie;
 mod media;
 mod tv; // Add tv module
@@ -145,8 +141,7 @@ fn main() {
             let _base_url = webserver_matches.get_one::<String>("base-url").and_then(|s| url::Url::parse(s).ok());
                         
             // Start the web server
-            let runtime = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-            if let Err(e) = runtime.block_on(start_webserver(output_dir, tv_folders, movies_folders, port)) {
+            if let Err(e) = start_webserver(output_dir, tv_folders, movies_folders, port) {
                 log::error!(target: "cli", "Failed to start web server: {}", e);
             }
         },
@@ -483,37 +478,95 @@ fn generate_content(app: &clap::ArgMatches) {
 }
 
 // Function to start the web server
-async fn start_webserver(html_dir: String, tv_folders: Vec<(String, String)>, movies_folder: Vec<(String, String)>, port: u16) -> std::io::Result<()> {
-    use actix_web::{web, App, HttpServer, HttpResponse, middleware, HttpRequest};
-    use actix_files as fs;
+fn start_webserver(html_dir: String, tv_folders: Vec<(String, String)>, movies_folder: Vec<(String, String)>, port: u16) -> std::io::Result<()> {
+    use rouille::{Response, router};
+    use std::path::PathBuf;
     
     log::info!(target: "cli", "Starting web server on port {} serving files from {}", port, html_dir);
     
-    HttpServer::new(move || {
-        let output_dir = html_dir.clone();
-        let mut app = App::new()
-            .wrap(middleware::Logger::default());
+    let html_dir_path = PathBuf::from(html_dir);
+    let address = format!("127.0.0.1:{}", port);
+    
+    // Rouille's start_server doesn't return, so we don't need to handle the result
+    println!("Starting web server at http://{}", address);
+    rouille::start_server(address, move |request| {
+        log::info!(target: "cli", "{} {}", request.method(), request.url());
 
+        // First try to handle media folders
         for (folder, mount) in &movies_folder {
-            app = app.service(fs::Files::new(mount.as_str(), folder.as_str()).show_files_listing());
+            let mount_str = format!("/{}", mount);
+            if request.url().starts_with(&mount_str) {
+                let rel_path = &request.url()[mount_str.len()..];
+                let file_path = PathBuf::from(folder).join(rel_path.trim_start_matches('/'));
+                if file_path.exists() {
+                    // Use mime_guess to determine content type
+                    let mime = mime_guess::from_path(&file_path).first_or_octet_stream().to_string();
+                    return Response::from_file(mime, std::fs::File::open(file_path).unwrap());
+                }
+            }
         }
+        
+        // Then try TV folders
         for (folder, mount) in &tv_folders {
-            app = app.service(fs::Files::new(mount.as_str(), folder.as_str()).show_files_listing());
+            let mount_str = format!("/{}", mount);
+            if request.url().starts_with(&mount_str) {
+                let rel_path = &request.url()[mount_str.len()..];
+                let file_path = PathBuf::from(folder).join(rel_path.trim_start_matches('/'));
+                if file_path.exists() {
+                    // Use mime_guess to determine content type
+                    let mime = mime_guess::from_path(&file_path).first_or_octet_stream().to_string();
+                    return Response::from_file(mime, std::fs::File::open(file_path).unwrap());
+                }
+            }
         }
-        app = app.service(
-                fs::Files::new("/", output_dir)
-                    .index_file("index.html")
-                    .use_last_modified(true)
-            )
-            .default_service(web::to(|req: HttpRequest| async move {
-                log::info!(target: "cli", "404 for path: {}", req.path());
-                HttpResponse::NotFound().body("Not found")
-            }));
-        app
-    })
-    .bind(format!("127.0.0.1:{}", port))?
-    .run()
-    .await
+        
+        // Finally serve the static HTML files
+        router!(request,
+            (GET) ["/"] => {
+                let index_path = html_dir_path.join("index.html");
+                if index_path.exists() {
+                    Response::from_file("text/html", std::fs::File::open(index_path).unwrap())
+                } else {
+                    Response::text("Index file not found").with_status_code(404)
+                }
+            },
+            (GET) ["/media.css"] => {
+                Response::from_file("text/css", std::fs::File::open(html_dir_path.join("media.css")).unwrap())
+            },
+            (GET) ["/media.js"] => {
+                Response::from_file("application/javascript", std::fs::File::open(html_dir_path.join("media.js")).unwrap())
+            },
+            (GET) ["/search.js"] => {
+                Response::from_file("application/javascript", std::fs::File::open(html_dir_path.join("search.js")).unwrap())
+            },
+            (GET) ["/search-index.json"] => {
+                Response::from_file("application/json", std::fs::File::open(html_dir_path.join("search-index.json")).unwrap())
+            },
+            (GET) ["/movies.html"] => {
+                Response::from_file("text/html", std::fs::File::open(html_dir_path.join("movies.html")).unwrap())
+            },
+            (GET) ["/tv.html"] => {
+                Response::from_file("text/html", std::fs::File::open(html_dir_path.join("tv.html")).unwrap())
+            },
+            // Fallback for other HTML files (media pages)
+            _ => {
+                let path = html_dir_path.join(request.url().trim_start_matches('/'));
+                if path.exists() && path.is_file() {
+                    // Use mime_guess to determine content type
+                    let mime = mime_guess::from_path(&path).first_or_octet_stream().to_string();
+                    Response::from_file(mime, std::fs::File::open(path).unwrap())
+                } else {
+                    log::info!(target: "cli", "404 for path: {}", request.url());
+                    Response::html("Not found").with_status_code(404)
+                }
+            }
+        )
+    });
+    
+    // This function never actually returns because start_server blocks indefinitely
+    // We keep the return type for compatibility with the rest of the code
+    #[allow(unreachable_code)]
+    Ok(())
 }
 
 #[cfg(test)]
