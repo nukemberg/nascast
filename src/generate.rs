@@ -214,8 +214,7 @@ fn build_search_index(movies: &[(MovieInfo, &MediaFolder)], all_tv_series: &[TvS
         for episode in &series.episodes {
             search_index.add_entry(SearchIndexEntry {
                 id: generate_id(&episode.path, "episode"),
-                title: format!("{} - {} S{:02}E{:02}{}",
-                    series.name,
+                title: format!("{} S{:02}E{:02}{}",
                     series.name,
                     episode.season,
                     episode.episode,
