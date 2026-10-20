@@ -40,20 +40,5 @@ pub fn generate_id(path: &std::path::Path, media_type: &str) -> String {
 
 /// Helper function to build meta string from individual fields
 pub fn build_meta_string(genre: Option<&str>, actors: Option<&str>, director: Option<&str>, writer: Option<&str>) -> String {
-    let mut meta_parts = Vec::new();
-    
-    if let Some(g) = genre {
-        meta_parts.push(g.to_string());
-    }
-    if let Some(a) = actors {
-        meta_parts.push(a.to_string());
-    }
-    if let Some(d) = director {
-        meta_parts.push(d.to_string());
-    }
-    if let Some(w) = writer {
-        meta_parts.push(w.to_string());
-    }
-    
-    meta_parts.join(" ")
+    [genre, actors, director, writer].into_iter().flatten().collect::<Vec<_>>().join(" ")
 }

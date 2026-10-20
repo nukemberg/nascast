@@ -1,21 +1,15 @@
-use serde::Deserialize;
-use serde_derive::Serialize;
-use reqwest;
-use url::Url;
+use serde::{Deserialize, Serialize};
 use std::error;
+use std::sync::LazyLock;
+use url::Url;
 
 const OMDB_API_URL: &str = "https://www.omdbapi.com";
 
 #[derive(Serialize, Debug, PartialEq)]
-
 pub struct MediaInfo {
     pub name: String,
     pub year: Option<u16>,
     pub path: std::path::PathBuf
-}
-
-pub trait MediaInfoEquiv {
-    fn path(&self) -> &std::path::Path;
 }
 
 #[derive(Debug, Deserialize)]
@@ -188,6 +182,13 @@ impl OmdbResponse {
     }
 }
 
+/// Extracts the Rotten Tomatoes score from an OMDB ratings list, if present.
+pub fn rotten_tomatoes_rating(ratings: &[OmdbRatings]) -> Option<String> {
+    ratings.iter()
+        .find(|r| r.source == "Rotten Tomatoes")
+        .map(|r| r.value.clone())
+}
+
 impl std::fmt::Display for OmdbType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -198,22 +199,26 @@ impl std::fmt::Display for OmdbType {
     }
 }
 
-pub fn omdb_get_metadata(omdb_api_key: &str, entity_type: OmdbType, title: &str, year: Option<u16>) -> Result<OmdbResponse, Box<dyn error::Error>> {
+static HTTP_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(reqwest::blocking::Client::new);
+
+fn omdb_request(omdb_api_key: &str, entity_type: OmdbType, title: &str, extra: &[(&str, String)]) -> Result<OmdbResponse, Box<dyn error::Error>> {
     let mut params = vec![
         ("apiKey", omdb_api_key.to_string()),
         ("t", title.to_string()),
         ("type", entity_type.to_string()),
     ];
-    if let Some(y) = year {
-        params.push(("y", y.to_string()));
-    }
+    params.extend_from_slice(extra);
 
-    let client = reqwest::blocking::Client::new();
-    let resp = client.get(OMDB_API_URL)
+    let resp = HTTP_CLIENT.get(OMDB_API_URL)
         .query(&params)
         .send()?
         .json::<OmdbResponse>()?;
     Ok(resp)
+}
+
+pub fn omdb_get_metadata(omdb_api_key: &str, entity_type: OmdbType, title: &str, year: Option<u16>) -> Result<OmdbResponse, Box<dyn error::Error>> {
+    let extra: Vec<_> = year.map(|y| ("y", y.to_string())).into_iter().collect();
+    omdb_request(omdb_api_key, entity_type, title, &extra)
 }
 
 pub fn omdb_get_episode_metadata(
@@ -222,19 +227,10 @@ pub fn omdb_get_episode_metadata(
     season: u8,
     episode: u8,
 ) -> Result<OmdbResponse, Box<dyn error::Error>> {
-    let params = vec![
-        ("apiKey", omdb_api_key.to_string()),
-        ("t", series_title.to_string()),
+    let resp = omdb_request(omdb_api_key, OmdbType::Episode, series_title, &[
         ("Season", season.to_string()),
         ("Episode", episode.to_string()),
-        ("type", OmdbType::Episode.to_string()),
-    ];
-
-    let client = reqwest::blocking::Client::new();
-    let resp = client.get(OMDB_API_URL)
-        .query(&params)
-        .send()?
-        .json::<OmdbResponse>()?;
+    ])?;
 
     if let OmdbResponse::Episode { .. } = resp {
         Ok(resp)

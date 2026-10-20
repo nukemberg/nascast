@@ -1,12 +1,13 @@
-use crate::media::MediaInfoEquiv; // Keep this for the trait
-use lazy_static::lazy_static;
-use regex::Regex;
-use serde::{Serialize, Deserialize}; // Add Deserialize
+use std::collections::BTreeMap;
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::fs; // Added for directory reading
-use std::io; // Added for io::Error
+use std::sync::LazyLock;
+use regex::Regex;
+use serde::{Serialize, Deserialize};
 use url::Url;
-use crate::cache::MediaCache; // Import MediaCache
+use crate::cache::MediaCache;
+use crate::media::{omdb_get_episode_metadata, omdb_get_metadata, rotten_tomatoes_rating, OmdbResponse, OmdbType};
 
 /// Holds information parsed directly from a TV Series folder path.
 #[derive(Serialize, Debug, PartialEq, Clone)]
@@ -29,6 +30,40 @@ pub struct TvSeriesMediaInfo {
     pub poster_url: Option<String>,
     pub imdb_rating: Option<String>,
     pub total_seasons: Option<String>,
+}
+
+impl TvSeriesMediaInfo {
+    fn new(name: String, year: Option<u16>, path: PathBuf, episodes: Vec<TvEpisodeMediaInfo>) -> Self {
+        TvSeriesMediaInfo {
+            name,
+            year,
+            path,
+            episodes,
+            released: None,
+            genre: None,
+            plot: None,
+            actors: None,
+            language: None,
+            country: None,
+            poster_url: None,
+            imdb_rating: None,
+            total_seasons: None,
+        }
+    }
+
+    /// Copies OMDB series metadata onto the folder-derived series info.
+    pub fn apply_series_info(&mut self, info: &TvSeriesInfo) {
+        self.poster_url = Some(info.poster_url.to_string());
+        self.released = Some(info.released.clone());
+        self.genre = Some(info.genre.clone());
+        self.plot = Some(info.plot.clone());
+        self.actors = Some(info.actors.clone());
+        self.language = Some(info.language.clone());
+        self.country = Some(info.country.clone());
+        self.imdb_rating = Some(info.imdb_rating.clone());
+        self.total_seasons = Some(info.total_seasons.clone());
+        self.year = info.year;
+    }
 }
 
 /// Holds information parsed directly from a TV Episode video file path.
@@ -56,16 +91,19 @@ pub struct TvEpisodeMediaInfo {
     pub media_ref: Option<String>,
 }
 
-impl MediaInfoEquiv for TvEpisodeMediaInfo {
-    fn path(&self) -> &Path {
-        &self.path
+impl TvEpisodeMediaInfo {
+    /// Copies OMDB episode metadata onto the file-derived episode info.
+    pub fn apply_episode_info(&mut self, info: EpisodeTemplateData) {
+        self.title = Some(info.title);
+        self.plot = info.plot;
+        self.imdb_rating = info.imdb_rating;
+        self.air_date = info.aired_date;
+        self.director = info.director;
     }
 }
 
-// ---- OMDB-enriched Struct Definitions ----
-// These structs hold data after enrichment from OMDB
-
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)] // Add Deserialize
+/// OMDB-enriched TV series details.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct TvSeriesInfo {
     pub name: String,
     pub year: Option<u16>,
@@ -85,29 +123,7 @@ pub struct TvSeriesInfo {
     pub rotten_tomatoes_rating: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)] // Add Deserialize, Not Cloned as per original, add if necessary
-pub struct TvEpisodeInfo {
-    pub series_name: String,
-    pub season: u8,
-    pub episode: u8,
-    pub episode_title: String,
-    pub year: Option<u16>, // Year of the episode/series
-    pub path: PathBuf,     // Path to the media file
-    pub series_info: Option<TvSeriesInfo>, // Link to the overall series info
-    pub imdb_rating: Option<String>,
-    pub plot: Option<String>,
-}
-
-impl MediaInfoEquiv for TvEpisodeInfo {
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-// ---- Structs for HTML Template Data (using OMDB-enriched info) ----
-
-// The `TvSeriesInfo` and `TvEpisodeInfo` structs defined above
-// will be primary sources for these template structs.
+// ---- Structs for HTML Template Data ----
 
 /// Data structure for rendering a full TV series page.
 #[derive(Serialize, Debug)]
@@ -116,18 +132,41 @@ pub struct SeriesPageTemplateData {
     pub series_info: Option<TvSeriesInfo>,
     /// List of seasons, each containing its episodes.
     pub seasons: Vec<SeasonTemplateData>,
-    pub name: String, // Series name as detected from folder structure
+    /// Series name as detected from folder structure
+    pub name: String,
+}
+
+impl SeriesPageTemplateData {
+    /// Builds the series page data, grouping episodes by season in ascending order.
+    pub fn new(series: &TvSeriesMediaInfo, series_info: Option<TvSeriesInfo>) -> Self {
+        let mut seasons_map: BTreeMap<u8, Vec<EpisodeTemplateData>> = BTreeMap::new();
+        for ep in &series.episodes {
+            seasons_map.entry(ep.season).or_default().push(EpisodeTemplateData {
+                title: ep.title.clone().unwrap_or_default(),
+                episode_number: ep.episode,
+                plot: ep.plot.clone(),
+                imdb_rating: ep.imdb_rating.clone(),
+                aired_date: ep.air_date.clone(),
+                director: ep.director.clone(),
+                media_ref: ep.media_ref.clone().unwrap_or_default(),
+            });
+        }
+        let seasons = seasons_map.into_iter()
+            .map(|(season_number, episodes)| SeasonTemplateData { season_number, episodes })
+            .collect();
+        SeriesPageTemplateData { series_info, seasons, name: series.name.clone() }
+    }
 }
 
 /// Data structure for a single season within a series page template.
-#[derive(Serialize, Deserialize, Debug)] // Add Deserialize
+#[derive(Serialize, Deserialize, Debug)]
 pub struct SeasonTemplateData {
     pub season_number: u8,
     pub episodes: Vec<EpisodeTemplateData>,
 }
 
 /// Data structure for a single episode within a season.
-#[derive(Serialize, Deserialize, Debug, Clone)] // Add Deserialize
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EpisodeTemplateData {
     /// Episode-specific title (e.g., from OMDB).
     pub title: String,
@@ -145,312 +184,199 @@ pub struct EpisodeTemplateData {
     pub media_ref: String,
 }
 
-lazy_static! {
-    pub static ref TV_PATTERNS_RE: Vec<Regex> = {
-        let patterns = vec![
-            // Priority 1: Fullest match - Name, SxxExx
-            r"(?i)(?P<name>.+?)[._ ]S(?P<season>\\d{1,2})E(?P<episode>\\d{1,2})",
-            // Priority 1: Fullest match - Name, xxXxx
-            r"(?i)(?P<name>.+?)[._ ](?P<season>\\d{1,2})x(?P<episode>\\d{1,2})",
-            
-            // Priority 2: SxxExx at start of filename (or after non-word char), no series name in file
-            // e.g., "S01E01.mkv", "ignored-S01E01.mkv"
-            r"(?i)(?:^|[^a-zA-Z0-9\\p{L}])S(?P<season>\\d{1,2})E(?P<episode>\\d{1,2})",
-            // Priority 2: xxXxx at start of filename (or after non-word char), no series name in file
-            // e.g., "1x01.mkv"
-            r"(?i)(?:^|[^a-zA-Z0-9\\p{L}])(?P<season>\\d{1,2})x(?P<episode>\\d{1,2})",
+fn compile_all(patterns: &[&str]) -> Vec<Regex> {
+    patterns.iter().map(|p| Regex::new(p).unwrap()).collect()
+}
 
-            // Priority 3: Name then Eyy (season from folder context)
-            r"(?i)(?P<name>.+?)[._ ]E(?P<episode>\\d{1,2})",
-            // Priority 3: Name then Episode yy (season from folder context)
-            r"(?i)(?P<name>.+?)[._ ]Episode[._ ](?P<episode>\\d{1,2})",
-            
-            // Priority 4: Eyy at start (season from folder context)
-            r"(?i)(?:^|[^a-zA-Z0-9\\p{L}])E(?P<episode>\\d{1,2})",
-            // Priority 4: Episode yy at start (season from folder context)
-            r"(?i)(?:^|[^a-zA-Z0-9\\p{L}])Episode[._ ](?P<episode>\\d{1,2})",
-            
-            // Priority 5: Special compact format (e.g. tloop0108)
-            // Assumes name part does not end with digits that could be season/episode
-            r"(?i)(?P<name>[a-zA-Z ._-]+?)(?P<season>\\d{2})(?P<episode>\\d{2})[^\\d\\p{L}/]*$",
-        ];
-        patterns.into_iter().map(|p| Regex::new(&p.replace("\\\\d", "\\d").replace("\\\\p{L}", "\\p{L}")).unwrap()).collect()
-    };
+static TV_PATTERNS_RE: LazyLock<Vec<Regex>> = LazyLock::new(|| compile_all(&[
+    // Priority 1: Fullest match - Name, SxxExx
+    r"(?i)(?P<name>.+?)[._ ]S(?P<season>\d{1,2})E(?P<episode>\d{1,2})",
+    // Priority 1: Fullest match - Name, xxXxx
+    r"(?i)(?P<name>.+?)[._ ](?P<season>\d{1,2})x(?P<episode>\d{1,2})",
 
-    pub static ref SEASON_FOLDER_PATTERNS_RE: Vec<Regex> = {
-        let patterns = vec![
-            // Folder name "Season XX" or "SXX" (captures only season)
-            r"(?i)^S(?:eason)?[._ ]?(?P<season>\\d{1,2})$",
-            // Series name followed by SXX or Season XX
-            r"(?i)(?P<name>.+?)[._ ]S(?:eason)?[._ ]?(?P<season>\\d{1,2})",
-        ];
-        patterns.into_iter().map(|p| Regex::new(&p.replace("\\\\d", "\\d")).unwrap()).collect() // Correct \\d to \d
-    };
+    // Priority 2: SxxExx at start of filename (or after non-word char), no series name in file
+    // e.g., "S01E01.mkv", "ignored-S01E01.mkv"
+    r"(?i)(?:^|[^a-zA-Z0-9\p{L}])S(?P<season>\d{1,2})E(?P<episode>\d{1,2})",
+    // Priority 2: xxXxx at start of filename (or after non-word char), no series name in file
+    // e.g., "1x01.mkv"
+    r"(?i)(?:^|[^a-zA-Z0-9\p{L}])(?P<season>\d{1,2})x(?P<episode>\d{1,2})",
+
+    // Priority 3: Name then Eyy (season from folder context)
+    r"(?i)(?P<name>.+?)[._ ]E(?P<episode>\d{1,2})",
+    // Priority 3: Name then Episode yy (season from folder context)
+    r"(?i)(?P<name>.+?)[._ ]Episode[._ ](?P<episode>\d{1,2})",
+
+    // Priority 4: Eyy at start (season from folder context)
+    r"(?i)(?:^|[^a-zA-Z0-9\p{L}])E(?P<episode>\d{1,2})",
+    // Priority 4: Episode yy at start (season from folder context)
+    r"(?i)(?:^|[^a-zA-Z0-9\p{L}])Episode[._ ](?P<episode>\d{1,2})",
+
+    // Priority 5: Special compact format (e.g. tloop0108)
+    // Assumes name part does not end with digits that could be season/episode
+    r"(?i)(?P<name>[a-zA-Z ._-]+?)(?P<season>\d{2})(?P<episode>\d{2})[^\d\p{L}/]*$",
+]));
+
+static SEASON_FOLDER_PATTERNS_RE: LazyLock<Vec<Regex>> = LazyLock::new(|| compile_all(&[
+    // Folder name "Season XX" or "SXX" (captures only season)
+    r"(?i)^S(?:eason)?[._ ]?(?P<season>\d{1,2})$",
+    // Series name followed by SXX or Season XX
+    r"(?i)(?P<name>.+?)[._ ]S(?:eason)?[._ ]?(?P<season>\d{1,2})",
+]));
+
+/// Finds a year pattern (YYYY) within a string.
+static YEAR_FINDER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:\(|\[|\b)(\d{4})(?:\)|\]|\b)").unwrap());
+/// Captures a name without its trailing year pattern.
+static NAME_CLEANER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(.*?)(?:[._ ]*(?:\(|\[)?\d{4}(?:\)|\])?)?[._ ]*$").unwrap());
+static PAREN_YEAR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\(\d{4}\)").unwrap());
+static YEAR_BEFORE_SXX_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(\d{4})[._ ]*S\d{1,2}$").unwrap());
+
+/// Returns the first plausible year (1900..2050) found in `s`.
+fn find_year(s: &str) -> Option<u16> {
+    let y = YEAR_FINDER_RE.captures(s)?.get(1)?.as_str().parse::<u16>().ok()?;
+    (1900..2050).contains(&y).then_some(y)
+}
+
+/// Strips a trailing year pattern from `name`.
+fn strip_trailing_year(name: &str) -> String {
+    NAME_CLEANER_RE.captures(name)
+        .and_then(|caps| caps.get(1))
+        .map_or_else(|| name.to_string(), |m| m.as_str().trim().to_string())
+}
+
+fn dots_to_spaces(s: &str) -> String {
+    s.replace('.', " ").trim().to_string()
 }
 
 pub fn parse_tv_episode_path(
-    file_path: &std::path::Path,
+    file_path: &Path,
     series_name_from_folder: Option<String>,
     season_from_folder: Option<u8>,
 ) -> Option<TvEpisodeMediaInfo> {
     let file_name = file_path.file_stem()?.to_str()?;
+    // The first matching pattern decides; we don't fall through to later patterns.
+    let caps = TV_PATTERNS_RE.iter().find_map(|re| re.captures(file_name))?;
 
-    for re in TV_PATTERNS_RE.iter() {
-        if let Some(caps) = re.captures(file_name) {
-            let name_match = caps.name("name").map(|m| m.as_str().replace(".", " ").trim().to_string());
-            let season_match = caps.name("season").and_then(|m| m.as_str().parse::<u8>().ok());
-            let episode_match = caps.name("episode").and_then(|m| m.as_str().parse::<u8>().ok());
+    let series_name = caps.name("name").map(|m| dots_to_spaces(m.as_str())).or(series_name_from_folder)?;
+    let season = caps.name("season").and_then(|m| m.as_str().parse::<u8>().ok()).or(season_from_folder)?;
+    let episode = caps.name("episode").and_then(|m| m.as_str().parse::<u8>().ok())?;
 
-            let series_name = name_match.or_else(|| series_name_from_folder.clone())?;
-            let season = season_match.or(season_from_folder)?;
-            let episode = episode_match?;
-
-            return Some(TvEpisodeMediaInfo {
-                series_name,
-                season,
-                episode,
-                path: file_path.to_path_buf(),
-                title: None,
-                plot: None,
-                imdb_rating: None,
-                air_date: None,
-                director: None,
-                media_ref: None,
-            });
-        }
-    }
-    None
+    Some(TvEpisodeMediaInfo {
+        series_name,
+        season,
+        episode,
+        path: file_path.to_path_buf(),
+        title: None,
+        plot: None,
+        imdb_rating: None,
+        air_date: None,
+        director: None,
+        media_ref: None,
+    })
 }
 
-pub fn parse_series_folder_name(folder_path: &std::path::Path) -> (Option<String>, Option<u8>, Option<u16>) {
+/// Parses a series or season folder name into `(series name, season, year)`.
+pub fn parse_series_folder_name(folder_path: &Path) -> (Option<String>, Option<u8>, Option<u16>) {
     let folder_name = folder_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let mut parsed_year = find_year(folder_name);
 
-    // Regex to find a year pattern (YYYY) within a string.
-    let year_finder_re = Regex::new(r"(?:\(|\[|\b)(\d{4})(?:\)|\]|\b)").unwrap();
-    // Regex to help clean a name by removing a trailing year pattern.
-    let name_cleaner_re = Regex::new(r"^(.*?)(?:[._ ]*(?:\(|\[)?\d{4}(?:\)|\])?)?[._ ]*$").unwrap();
-
-    let mut parsed_year: Option<u16> = None;
-    // First, try to find a year anywhere in the folder name.
-    if let Some(caps) = year_finder_re.captures(folder_name) {
-        if let Ok(y) = caps.get(1).unwrap().as_str().parse::<u16>() {
-            // Basic sanity check for a plausible year.
-            if y >= 1900 && y < 2050 {
-                parsed_year = Some(y);
-            }
-        }
-    }
-
-    let name_candidate = folder_name.replace(".", " ").trim().to_string();
-
-    // Try to parse season using existing SEASON_FOLDER_PATTERNS_RE
     for re in SEASON_FOLDER_PATTERNS_RE.iter() {
-        if let Some(caps) = re.captures(folder_name) { // Apply to original folder_name
-            let season_from_pattern = caps.name("season").and_then(|m| m.as_str().parse::<u8>().ok());
+        let Some(caps) = re.captures(folder_name) else { continue };
+        let Some(season) = caps.name("season").and_then(|m| m.as_str().parse::<u8>().ok()) else { continue };
+        let full_match = caps.get(0).unwrap();
 
-            if let Some(season_val) = season_from_pattern {
-                let mut series_name_str;
-                if let Some(name_match_from_season_re) = caps.name("name") {
-                    series_name_str = name_match_from_season_re.as_str().replace(".", " ").trim().to_string();
-                } else {
-                    if let Some(full_season_match) = caps.get(0) {
-                         series_name_str = folder_name[..full_season_match.start()].replace(".", " ").trim().to_string();
-                    } else {
-                        series_name_str = name_candidate.clone();
-                    }
-                }
+        let mut series_name = match caps.name("name") {
+            Some(name) => dots_to_spaces(name.as_str()),
+            None => dots_to_spaces(&folder_name[..full_match.start()]),
+        };
 
-                // If a global year wasn't found, try to find one in this derived series_name_str
-                if parsed_year.is_none() {
-                    if let Some(ycaps) = year_finder_re.captures(&series_name_str) {
-                         if let Ok(y) = ycaps.get(1).unwrap().as_str().parse::<u16>() {
-                            if y >= 1900 && y < 2050 {
-                                parsed_year = Some(y);
-                            }
-                        }
-                    }
-                }
-                // --- FIX: Only strip trailing year if it is not part of the main name (not in parens, not before Sxx/Season) ---
-                if parsed_year.is_some() {
-                    // Only strip if not in parens and not immediately before Sxx/Season
-                    let paren_year_re = Regex::new(r"\(\d{4}\)").unwrap();
-                    // Check if the year is in parens in the name
-                    let year_in_parens = paren_year_re.is_match(&series_name_str);
-                    // Only keep year if it's directly before Sxx (e.g. Series.Name.2023.S01), not before 'season'
-                    let year_before_sxx_re = Regex::new(r"(?i)(\d{4})[._ ]*S\d{1,2}$").unwrap();
-                    let year_before_sxx = year_before_sxx_re.is_match(folder_name);
-                    if !year_in_parens && !year_before_sxx {
-                        if let Some(clean_caps) = name_cleaner_re.captures(&series_name_str) {
-                            series_name_str = clean_caps.get(1).map_or_else(|| series_name_str.clone(), |m| m.as_str().trim().to_string());
-                        }
-                    }
-                }
-                if series_name_str.is_empty() && folder_name.starts_with(caps.get(0).unwrap().as_str()){
-                    return (None, Some(season_val), parsed_year);
-                }
-                return (Some(series_name_str).filter(|s| !s.is_empty()), Some(season_val), parsed_year);
-            }
+        if parsed_year.is_none() {
+            parsed_year = find_year(&series_name);
         }
+        // Keep the year as part of the name when it's in parens or directly before Sxx
+        // (e.g. "Series.Name.2023.S01"); otherwise strip it.
+        if parsed_year.is_some()
+            && !PAREN_YEAR_RE.is_match(&series_name)
+            && !YEAR_BEFORE_SXX_RE.is_match(folder_name)
+        {
+            series_name = strip_trailing_year(&series_name);
+        }
+        if series_name.is_empty() && folder_name.starts_with(full_match.as_str()) {
+            return (None, Some(season), parsed_year);
+        }
+        return (Some(series_name).filter(|s| !s.is_empty()), Some(season), parsed_year);
     }
 
-    // No season pattern matched. The whole folder_name is effectively the series name.
-    // `parsed_year` holds any year found initially.
-    // Now, we need to decide if the returned name string should have the year stripped if `parsed_year` is Some.
-    // Test `("Series Name (2020)") -> (Some("Series Name"), None, Some(2020))` implies stripping.
-    let final_name_str = if parsed_year.is_some() {
-        if let Some(clean_caps) = name_cleaner_re.captures(&name_candidate) {
-            clean_caps.get(1).map_or_else(|| name_candidate.clone(), |m| m.as_str().trim().to_string())
-        } else {
-            name_candidate
-        }
-    } else {
-        name_candidate
-    };
-    
-    (Some(final_name_str).filter(|s| !s.is_empty()), None, parsed_year)
+    // No season pattern matched: the whole folder name is the series name, minus any year.
+    let name = dots_to_spaces(folder_name);
+    let name = if parsed_year.is_some() { strip_trailing_year(&name) } else { name };
+    (Some(name).filter(|s| !s.is_empty()), None, parsed_year)
 }
 
-
-// Helper function to check for common video file extensions
 fn is_video_file(path: &Path) -> bool {
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        matches!(ext.to_lowercase().as_str(), "mkv" | "mp4" | "avi" | "mov" | "wmv" | "flv" | "webm")
-    } else {
-        false
-    }
+    path.is_file()
+        && path.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| matches!(ext.to_lowercase().as_str(), "mkv" | "mp4" | "avi" | "mov" | "wmv" | "flv" | "webm"))
 }
 
-// Helper function to scan files within a given folder and collect episode information
+/// Collects episodes from the video files directly inside `folder_path` (non-recursive).
 fn collect_episodes_from_folder(
     folder_path: &Path,
-    series_name: &str, // Ensure this is the clean series name, not including season/year if parsed separately
-    season_from_folder: Option<u8>, // Contextual season number from folder structure
+    series_name: &str,
+    season_from_folder: Option<u8>,
     episodes_list: &mut Vec<TvEpisodeMediaInfo>,
 ) -> Result<(), io::Error> {
     for file_entry in fs::read_dir(folder_path)? {
-        let file_entry = file_entry?;
-        let file_path = file_entry.path();
-
-        if file_path.is_file() && is_video_file(&file_path) {
-            if let Some(episode_info) = parse_tv_episode_path(
-                &file_path,
-                Some(series_name.to_string()),
-                season_from_folder, // Pass the determined season context
-            ) {
-                episodes_list.push(episode_info);
-            }
+        let file_path = file_entry?.path();
+        if is_video_file(&file_path) {
+            episodes_list.extend(parse_tv_episode_path(&file_path, Some(series_name.to_string()), season_from_folder));
         }
-        // Not recursing into subdirectories from here; scan_tv_directory handles structure.
     }
     Ok(())
 }
 
 /// Scans the main TV library directory to find all TV series and their episodes.
 ///
-/// It navigates through series folders and season subfolders, using the
-/// parsing functions to extract metadata for each episode and associate
-/// it with its parent series.
-pub fn scan_tv_directory(tv_base_path: &Path) -> Result<Vec<TvSeriesMediaInfo>, io::Error> { // Changed return type
+/// Supported layouts:
+/// - `<Series>/<Season folder>/<episode files>` (season taken from the folder name)
+/// - `<Series>/<other folder>/<episode files>` (season taken from file names)
+/// - `<Series>/<episode files>`
+/// - `<Series Season N>/<episode files>`
+pub fn scan_tv_directory(tv_base_path: &Path) -> Result<Vec<TvSeriesMediaInfo>, io::Error> {
     let mut all_series_info: Vec<TvSeriesMediaInfo> = Vec::new();
 
     for series_entry in fs::read_dir(tv_base_path)? {
-        let series_entry = series_entry?;
-        let series_folder_path = series_entry.path(); // Path to the potential series folder
-
+        let series_folder_path = series_entry?.path();
         if !series_folder_path.is_dir() {
-            continue; // Skip non-directories at the top level of the TV library
+            continue;
         }
 
-        // Try to parse the main folder as a series.
-        // It might also be a series folder that *includes* a season, e.g., "My Show Season 1"
-        let (parsed_series_name, parsed_season_from_series_folder, parsed_year_from_series_folder) =
-            parse_series_folder_name(&series_folder_path);
+        let (series_name, season_from_series_folder, year) = parse_series_folder_name(&series_folder_path);
+        // Top-level folders not recognized as a series are skipped.
+        let Some(series_name) = series_name else { continue };
 
-        if let Some(current_series_name_str) = parsed_series_name {
-            let mut current_series_episodes: Vec<TvEpisodeMediaInfo> = Vec::new();
-
-            // Case 1: The main series directory itself specifies a season (e.g., "My Show Season 1")
-            // In this case, parsed_series_name_str is "My Show", and parsed_season_from_series_folder is Some(1)
-            if let Some(main_dir_season_num) = parsed_season_from_series_folder {
-                collect_episodes_from_folder(
-                    &series_folder_path, // Scan files directly within this "Series Season X" directory
-                    &current_series_name_str,
-                    Some(main_dir_season_num), // Season context from this folder
-                    &mut current_series_episodes,
-                )?;
-            } else {
-                // Case 2: The main series directory is just "My Show".
-                // Look for season subfolders OR episode files directly within it.
-                for item_entry in fs::read_dir(&series_folder_path)? {
-                    let item_entry = item_entry?;
-                    let item_path = item_entry.path();
-
-                    if item_path.is_dir() {
-                        // Check if this subdirectory is a season folder (e.g., "Season 1", "S02")
-                        // or another type of subfolder (e.g. "Extras")
-                        let (_name_from_season_sub_dir, season_from_sub_dir, _year_from_sub_dir) =
-                            parse_series_folder_name(&item_path);
-
-                        if let Some(season_num) = season_from_sub_dir {
-                            // It's a season subfolder
-                            collect_episodes_from_folder(
-                                &item_path, // Scan within this season subfolder
-                                &current_series_name_str, // Inherit series name
-                                Some(season_num),         // Season context from this subfolder
-                                &mut current_series_episodes,
-                            )?;
-                        } else {
-                            // It's a subdirectory but not recognized as a season folder (e.g., "Extras", "Specials").
-                            // Scan it for episodes, relying on filenames for season/episode info.
-                            // The series name is still current_series_name_str.
-                            // No season context is provided by this sub-folder itself.
-                            collect_episodes_from_folder(
-                                &item_path,
-                                &current_series_name_str,
-                                None, 
-                                &mut current_series_episodes,
-                            )?;
-                        }
-                    } else if item_path.is_file() && is_video_file(&item_path) {
-                        // It's an episode file directly in the series folder (e.g., "My Show/My.Show.S01E01.mkv")
-                        // No season context from the immediate parent folder (series_folder_path).
-                        if let Some(episode_info) = parse_tv_episode_path(
-                            &item_path,
-                            Some(current_series_name_str.clone()),
-                            None, // No season context from this level of folder
-                        ) {
-                            current_series_episodes.push(episode_info);
-                        }
-                    }
+        let mut episodes: Vec<TvEpisodeMediaInfo> = Vec::new();
+        if season_from_series_folder.is_some() {
+            collect_episodes_from_folder(&series_folder_path, &series_name, season_from_series_folder, &mut episodes)?;
+        } else {
+            for item_entry in fs::read_dir(&series_folder_path)? {
+                let item_path = item_entry?.path();
+                if item_path.is_dir() {
+                    // Season subfolder ("Season 1", "S02") or other folder ("Extras"), in which
+                    // case the season must come from file names.
+                    let (_, season_from_sub_dir, _) = parse_series_folder_name(&item_path);
+                    collect_episodes_from_folder(&item_path, &series_name, season_from_sub_dir, &mut episodes)?;
+                } else if is_video_file(&item_path) {
+                    episodes.extend(parse_tv_episode_path(&item_path, Some(series_name.clone()), None));
                 }
             }
-            
-            // After collecting all episodes for current_series_name_str,
-            // create and add the TvSeriesMediaInfo if episodes were found.
-            if !current_series_episodes.is_empty() {
-                // Sort episodes by season and then episode number
-                current_series_episodes.sort_by_key(|ep| (ep.season, ep.episode));
-                
-                all_series_info.push(TvSeriesMediaInfo {
-                    name: current_series_name_str.clone(),
-                    year: parsed_year_from_series_folder,
-                    path: series_folder_path.to_path_buf(),
-                    episodes: current_series_episodes,
-                    poster_url: None, // Do not use placeholder, will be set from OMDB elsewhere if available
-                    released: None,
-                    genre: None,
-                    plot: None,
-                    actors: None,
-                    language: None,
-                    country: None,
-                    imdb_rating: None,
-                    total_seasons: None,
-                });
-            }
         }
-        // If parsed_series_name is None, this folder at the TV root is not recognized as a series folder and is skipped.
+
+        if !episodes.is_empty() {
+            episodes.sort_by_key(|ep| (ep.season, ep.episode));
+            all_series_info.push(TvSeriesMediaInfo::new(series_name, year, series_folder_path, episodes));
+        }
     }
-    // Sort series by name for consistent output
     all_series_info.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(all_series_info)
 }
@@ -458,85 +384,52 @@ pub fn scan_tv_directory(tv_base_path: &Path) -> Result<Vec<TvSeriesMediaInfo>, 
 pub fn get_series_info(
     omdb_api_key: &str,
     series_name: &str,
-    cache: &Option<MediaCache>,
+    cache: Option<&MediaCache>,
 ) -> Result<TvSeriesInfo, Box<dyn std::error::Error>> {
-    // Try to get from cache first
     if let Some(media_cache) = cache {
-        if let Some(cached_series_info) = media_cache.get_tv_series_by_name(series_name).map_err(|e| e.to_string())? {
+        if let Some(cached_series_info) = media_cache.get_tv_series_by_name(series_name)? {
             log::info!(target: "cli", "Cache hit for TV series: {}", series_name);
             return Ok(cached_series_info);
         }
     }
 
     log::info!(target: "cli", "Cache miss for TV series: {}. Fetching from OMDB.", series_name);
-    let r = crate::media::omdb_get_metadata(omdb_api_key, crate::media::OmdbType::Series, series_name, None)?;
+    let r = omdb_get_metadata(omdb_api_key, OmdbType::Series, series_name, None)?;
+    let info_url = r.imdb_url();
+    let OmdbResponse::Series {
+        title, year, director, poster, language, country, plot, genre,
+        runtime, released, rated, actors, imdb_rating, total_seasons, ratings, ..
+    } = r else {
+        return Err(format!("Unexpected OMDB response type for series: {}", series_name).into());
+    };
 
-    match r {
-        crate::media::OmdbResponse::Series { .. } => {
-            let info_url = r.imdb_url();
-            if let crate::media::OmdbResponse::Series {
-                title,
-                year, // This is a String, e.g., "2008-2013" or "2008-"
-                director,
-                poster,
-                language,
-                country,
-                plot,
-                genre,
-                runtime,
-                released,
-                rated,
-                actors,
-                imdb_rating,
-                total_seasons,
-                ratings,
-                ..
-            } = r
-            {
-                let rotten_tomatoes_rating = ratings.iter()
-                    .find(|r_item| r_item.source == "Rotten Tomatoes")
-                    .map(|r_item| r_item.value.to_string());
+    let series_info = TvSeriesInfo {
+        name: title,
+        // `year` is a range such as "2008-2013" or "2008-"; keep the start year.
+        year: year.split(|c: char| !c.is_ascii_digit()).next().and_then(|s| s.parse().ok()),
+        director,
+        info_url,
+        poster_url: Url::parse(&poster)?,
+        language,
+        country,
+        plot,
+        genre,
+        runtime,
+        released,
+        rated,
+        actors,
+        imdb_rating,
+        total_seasons,
+        rotten_tomatoes_rating: rotten_tomatoes_rating(&ratings),
+    };
 
-                // Safely parse the year string (e.g., "2008-2013" or "2008-") to get the start year.
-                let parsed_year: Option<u16> = year
-                    .split(|c: char| !c.is_digit(10))
-                    .next()
-                    .and_then(|s| s.parse::<u16>().ok());
-
-                let series_info = TvSeriesInfo {
-                    name: title,
-                    year: parsed_year, 
-                    director,
-                    info_url,
-                    poster_url: Url::parse(&poster)?,
-                    language,
-                    country,
-                    plot,
-                    genre,
-                    runtime,
-                    released,
-                    rated,
-                    actors,
-                    imdb_rating,
-                    total_seasons,
-                    rotten_tomatoes_rating,
-                };
-
-                // Store in cache
-                if let Some(media_cache) = cache {
-                    if let Err(e) = media_cache.store_tv_series(&series_info) {
-                        log::error!("Failed to store TV series '{}' in cache: {}", series_info.name, e);
-                    } else {
-                        log::info!(target: "cli", "Stored TV series '{}' in cache", series_info.name);
-                    }
-                }
-                Ok(series_info)
-            } else {
-                unreachable!("Should be OmdbResponse::Series variant");
-            }
+    if let Some(media_cache) = cache {
+        match media_cache.store_tv_series(&series_info) {
+            Ok(()) => log::info!(target: "cli", "Stored TV series '{}' in cache", series_info.name),
+            Err(e) => log::error!("Failed to store TV series '{}' in cache: {}", series_info.name, e),
         }
-        _ => Err(format!("Unexpected OMDB response type for series: {}", series_name).into()),
     }
+    Ok(series_info)
 }
 
 pub fn get_episode_info(
@@ -544,60 +437,40 @@ pub fn get_episode_info(
     series_name: &str,
     season: u8,
     episode: u8,
-    cache: &Option<MediaCache>,
+    cache: Option<&MediaCache>,
 ) -> Result<EpisodeTemplateData, Box<dyn std::error::Error>> {
-    // Try to get from cache first
     if let Some(media_cache) = cache {
-        if let Some(cached_episode_info) = media_cache.get_tv_episode(series_name, season, episode).map_err(|e| e.to_string())? {
+        if let Some(cached_episode_info) = media_cache.get_tv_episode(series_name, season, episode)? {
             log::info!(target: "cli", "Cache hit for TV episode: {} S{:02}E{:02}", series_name, season, episode);
             return Ok(cached_episode_info);
         }
     }
 
     log::info!(target: "cli", "Cache miss for TV episode: {} S{:02}E{:02}. Fetching from OMDB.", series_name, season, episode);
-    // Use the new omdb_get_episode_metadata function
-    let r = crate::media::omdb_get_episode_metadata(
-        omdb_api_key,
-        series_name,
-        season,
-        episode,
-    )?;
+    let r = omdb_get_episode_metadata(omdb_api_key, series_name, season, episode)?;
+    let OmdbResponse::Episode { title, plot, imdb_rating, released, director, .. } = r else {
+        return Err(format!("OMDB response was not an episode for: {} S{:02}E{:02}", series_name, season, episode).into());
+    };
 
-    // The response `r` is already confirmed to be OmdbResponse::Episode by omdb_get_episode_metadata or it would have errored.
-    if let crate::media::OmdbResponse::Episode {
+    let episode_data = EpisodeTemplateData {
         title,
-        // year, // Episode year might differ or be part of a range, handle carefully
-        plot,
-        imdb_rating,
-        released, // This is air date for episodes
-        director, // If available for episode
-        ..
-    } = r
-    {
-        let episode_data = EpisodeTemplateData {
-            title,
-            episode_number: episode,
-            plot: Some(plot),
-            imdb_rating: Some(imdb_rating),
-            aired_date: Some(released), // OMDB 'Released' is air date for episodes
-            director: Some(director), // director is String, so Some(director) is Option<String>
-            media_ref: String::new(), // This will be populated later by the caller
-        };
+        episode_number: episode,
+        plot: Some(plot),
+        imdb_rating: Some(imdb_rating),
+        // OMDB 'Released' is the air date for episodes
+        aired_date: Some(released),
+        director: Some(director),
+        // Populated later by the caller
+        media_ref: String::new(),
+    };
 
-        // Store in cache
-        if let Some(media_cache) = cache {
-            // Corrected call to store_tv_episode
-            if let Err(e) = media_cache.store_tv_episode(series_name, season, episode, &episode_data) {
-                log::error!("Failed to store TV episode '{}' S{:02}E{:02} in cache: {}", series_name, season, episode, e);
-            } else {
-                log::info!(target: "cli", "Stored TV episode '{}' S{:02}E{:02} in cache", series_name, season, episode);
-            }
+    if let Some(media_cache) = cache {
+        match media_cache.store_tv_episode(series_name, season, episode, &episode_data) {
+            Ok(()) => log::info!(target: "cli", "Stored TV episode '{}' S{:02}E{:02} in cache", series_name, season, episode),
+            Err(e) => log::error!("Failed to store TV episode '{}' S{:02}E{:02} in cache: {}", series_name, season, episode, e),
         }
-        Ok(episode_data)
-    } else {
-        // This case should ideally not be reached if omdb_get_episode_metadata works as expected (errors out if not an episode)
-        Err(format!("OMDB response was not an episode for: {} S{:02}E{:02}", series_name, season, episode).into())
     }
+    Ok(episode_data)
 }
 
 // ---- Tests ----
