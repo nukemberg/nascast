@@ -46,16 +46,18 @@ fn handle(request: &rouille::Request, base_path: &str, html_dir: &Path, media_fo
     }
 }
 
-/// Serves the generated HTML and the media folders. Never returns.
-pub fn start_webserver(html_dir: PathBuf, media_folders: Vec<MediaFolder>, port: u16, base_url: Option<Url>) -> ! {
+/// Serves the generated HTML and the media folders on `bind:port`. Never returns.
+pub fn start_webserver(html_dir: PathBuf, media_folders: Vec<MediaFolder>, bind: &str, port: u16, base_url: Option<Url>) -> ! {
     log::info!(target: "cli", "Starting web server on port {} serving files from {}", port, html_dir.display());
 
-    let address = format!("127.0.0.1:{}", port);
+    let address = format!("{}:{}", bind, port);
     let base_path = base_url.map(|url| url.path().trim_end_matches('/').to_string()).unwrap_or_default();
 
     println!("Starting web server at http://{}", address);
     rouille::start_server(address, move |request| {
         log::info!(target: "cli", "{} {}", request.method(), request.url());
+        // The Chromecast fetches subtitle tracks cross-origin and refuses them without CORS
         handle(request, &base_path, &html_dir, &media_folders)
+            .with_additional_header("Access-Control-Allow-Origin", "*")
     })
 }

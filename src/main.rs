@@ -67,6 +67,7 @@ fn cli() -> Command {
                 .arg(Arg::new("html-folder").long("html-folder").default_value("./pub"))
                 .arg(Arg::new("base-url").long("base-url"))
                 .arg(Arg::new("port").long("port").default_value("8000").help("Port to run the web server on"))
+                .arg(Arg::new("bind").long("bind").default_value("127.0.0.1").help("Address to listen on; use 0.0.0.0 so a Chromecast on the network can reach it"))
         )
 }
 
@@ -90,7 +91,8 @@ fn main() {
             let port = matches.get_one::<String>("port").unwrap().parse::<u16>().expect("Port must be a number");
             let mut media_folders = folders_arg(matches, "movies-folder");
             media_folders.extend(folders_arg(matches, "tv-folder"));
-            server::start_webserver(html_dir, media_folders, port, base_url_arg(matches));
+            let bind = matches.get_one::<String>("bind").unwrap();
+            server::start_webserver(html_dir, media_folders, bind, port, base_url_arg(matches));
         }
         // subcommand_required(true) makes this unreachable
         _ => unreachable!(),

@@ -408,6 +408,60 @@ footer {
     vertical-align: middle;
     margin-right: 0.5em;
 }
+.watch-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+.play-button-large {
+    padding: 0.6em 1.2em;
+    border-radius: 8px;
+    background: #222;
+    color: #fff;
+    text-decoration: none;
+}
+.cast-container {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+/* Cast controls are only shown once the browser can cast (see media.js) */
+.cast-button {
+    display: none;
+}
+body.cast-available .cast-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+}
+button.cast-button {
+    cursor: pointer;
+    border: none;
+    font: inherit;
+}
+.media-episode-cast-btn {
+    vertical-align: middle;
+    margin-right: 0.5em;
+    padding: 6px;
+    border-radius: 50%;
+    background: #222;
+    color: #fff;
+}
+.subtitle-select {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5em;
+    font-size: 0.9rem;
+    color: #666;
+}
+.cast-status {
+    font-size: 0.85rem;
+    color: #666;
+}
 .subtitle-links a {
     margin-right: 0.5em;
     color: inherit;

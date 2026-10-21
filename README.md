@@ -44,6 +44,21 @@ NASCast picks up `.srt` and `.vtt` files that belong to a video and publishes th
 
 The language comes from an ISO code (`en`, `eng`) or English name (`English`) in the file name. Files that aren't UTF-8 are decoded with the language's usual legacy encoding (e.g. windows-1255 for Hebrew).
 
+### Casting with subtitles
+
+Pages show a **Cast to TV** button (in Chrome, once a Chromecast is found) and a subtitle language picker; the chosen language is remembered across pages and can be changed while casting.
+
+The Chromecast fetches the video and subtitle files itself, so:
+
+- it must be able to reach the server: use `--base-url` with an address the Chromecast can reach, or run `nascast webserver --bind 0.0.0.0`
+- subtitle responses need a CORS header. `nascast webserver` sends one; with another web server add it yourself, e.g. for nginx:
+
+  ```nginx
+  location /subtitles/ {
+      add_header Access-Control-Allow-Origin *;
+  }
+  ```
+
 ## License
 
 MIT License - see the [LICENSE](LICENSE) file for details
