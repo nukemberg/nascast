@@ -126,3 +126,14 @@ bd prime                # Refresh Beads context
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/core-concepts/sync-concepts.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
+
+## Git & Commit Policy
+
+This repository opts in to the **team-maintainer** profile: agents may commit and push at their own discretion, without asking first. A "do not commit" or "do not push" instruction in the current conversation still wins.
+
+- Work directly on `master` and push to `origin master`.
+- Before committing code changes, run `cargo test` and `cargo clippy --all-targets`; don't commit with failing tests or new warnings.
+- Keep one logical change per commit, with a descriptive message (summary line, then details).
+- Push beads changes along with code (`bd dolt push`).
+- Never commit secrets or local data: `.env`, `omdb-movie.json`, `*.sqlite` caches, `pub/`.
+- Never force-push, rewrite pushed history, or delete branches without asking.

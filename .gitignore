@@ -19,3 +19,7 @@ Cargo.lock
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# Local secrets and caches
+.env
+*.sqlite

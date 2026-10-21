@@ -57,6 +57,17 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 - If a required sync or push is blocked, stop and report the exact command and error.
 <!-- END BEADS INTEGRATION -->
 
+## Git & Commit Policy
+
+This repository opts in to the **team-maintainer** profile: agents may commit and push at their own discretion, without asking first. A "do not commit" or "do not push" instruction in the current conversation still wins.
+
+- Work directly on `master` and push to `origin master`.
+- Before committing code changes, run `cargo test` and `cargo clippy --all-targets`; don't commit with failing tests or new warnings.
+- Keep one logical change per commit, with a descriptive message (summary line, then details).
+- Push beads changes along with code (`bd dolt push`).
+- Never commit secrets or local data: `.env`, `omdb-movie.json`, `*.sqlite` caches, `pub/`.
+- Never force-push, rewrite pushed history, or delete branches without asking.
+
 
 ## Build & Test
 
