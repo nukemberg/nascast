@@ -6,6 +6,7 @@ mod cache;
 mod generate;
 mod media;
 mod movie;
+mod opensubtitles;
 mod search;
 mod server;
 mod subtitles;
@@ -41,6 +42,21 @@ fn base_url_arg(matches: &ArgMatches) -> Option<Url> {
     matches.get_one::<String>("base-url").and_then(|s| Url::parse(s).ok())
 }
 
+/// Normalizes `--subtitle-languages` to ISO 639-1 codes (`eng`, `English` -> `en`).
+fn subtitle_languages_arg(matches: &ArgMatches) -> Vec<String> {
+    matches.get_many::<String>("subtitle-languages").unwrap_or_default()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .map(|l| match subtitles::find_language(l) {
+            Some(language) => language.code.to_string(),
+            None => {
+                log::warn!(target: "cli", "Unknown subtitle language '{}', passing it to OpenSubtitles as-is", l);
+                l.to_lowercase()
+            }
+        })
+        .collect()
+}
+
 fn cli() -> Command {
     let folder_args = [
         Arg::new("movies-folder").long("movies-folder").action(ArgAction::Append),
@@ -59,6 +75,15 @@ fn cli() -> Command {
                 .arg(Arg::new("cache-path").long("cache-path").default_value("./nascast_cache.sqlite"))
                 .arg(Arg::new("noop").long("noop").help("NoOp mode: only show metadata, does not write anything to disk").action(ArgAction::SetTrue))
                 .arg(Arg::new("verbosity").long("verbosity").short('v').action(ArgAction::Set))
+                .arg(Arg::new("subtitle-languages").long("subtitle-languages").value_delimiter(',')
+                    .help("Comma-separated languages to download missing subtitles in, e.g. en,he (requires --opensubtitles-api-key)"))
+                .arg(Arg::new("opensubtitles-api-key").long("opensubtitles-api-key").env("OPENSUBTITLES_API_KEY").hide_env_values(true)
+                    .help("OpenSubtitles API (consumer) key; enables subtitle downloads"))
+                .arg(Arg::new("opensubtitles-username").long("opensubtitles-username").env("OPENSUBTITLES_USERNAME")
+                    .help("OpenSubtitles account, for a higher daily download quota"))
+                .arg(Arg::new("opensubtitles-password").long("opensubtitles-password").env("OPENSUBTITLES_PASSWORD").hide_env_values(true))
+                // For testing against a fake API
+                .arg(Arg::new("opensubtitles-api-url").long("opensubtitles-api-url").hide(true).default_value(opensubtitles::DEFAULT_API_URL))
         )
         .subcommand(
             Command::new("webserver")
@@ -84,6 +109,13 @@ fn main() {
                 omdb_api_key: matches.get_one::<String>("omdb-api-key").unwrap().clone(),
                 cache_path: PathBuf::from(matches.get_one::<String>("cache-path").unwrap()),
                 noop: matches.get_flag("noop"),
+                subtitle_languages: subtitle_languages_arg(matches),
+                opensubtitles: matches.get_one::<String>("opensubtitles-api-key").map(|api_key| opensubtitles::Credentials {
+                    api_key: api_key.clone(),
+                    username: matches.get_one::<String>("opensubtitles-username").cloned(),
+                    password: matches.get_one::<String>("opensubtitles-password").cloned(),
+                    api_url: matches.get_one::<String>("opensubtitles-api-url").unwrap().clone(),
+                }),
             });
         }
         Some(("webserver", matches)) => {

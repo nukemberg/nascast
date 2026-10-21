@@ -2,6 +2,7 @@ use rusqlite::{Connection, OptionalExtension, Params, Result, params};
 use serde::de::DeserializeOwned;
 use std::path::Path;
 use std::fs;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::movie::MovieInfo;
 use crate::tv::{TvSeriesInfo, EpisodeTemplateData};
@@ -51,6 +52,20 @@ impl MediaCache {
                 episode INTEGER NOT NULL,
                 json_data TEXT NOT NULL,
                 UNIQUE(series_name, season, episode)
+            )",
+            [],
+        )?;
+
+        // One row per (video file, language) looked up on OpenSubtitles. `content` is NULL when
+        // nothing was found, so misses aren't searched again until they're stale.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS subtitles (
+                id INTEGER PRIMARY KEY,
+                media_path TEXT NOT NULL,
+                language TEXT NOT NULL,
+                content TEXT,
+                checked_at INTEGER NOT NULL,
+                UNIQUE(media_path, language)
             )",
             [],
         )?;
@@ -105,11 +120,60 @@ impl MediaCache {
         Ok(())
     }
 
+    /// Store the result of a subtitle lookup; `content` is `None` when nothing was found.
+    pub fn store_subtitle(&self, media_path: &Path, language: &str, content: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO subtitles (media_path, language, content, checked_at) VALUES (?1, ?2, ?3, ?4)",
+            params![media_path.to_string_lossy(), language, content, unix_now()],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieve a subtitle lookup result: `Some(Some(content))` when found, `Some(None)` for a
+    /// miss checked less than `retry_misses_after` ago, `None` when it needs (re)checking.
+    pub fn get_subtitle(&self, media_path: &Path, language: &str, retry_misses_after: Duration) -> Result<Option<Option<String>>> {
+        let row: Option<(Option<String>, i64)> = self.conn.query_row(
+            "SELECT content, checked_at FROM subtitles WHERE media_path = ?1 AND language = ?2",
+            params![media_path.to_string_lossy(), language],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?;
+        Ok(match row {
+            Some((Some(content), _)) => Some(Some(content)),
+            Some((None, checked_at)) if unix_now() - checked_at < retry_misses_after.as_secs() as i64 => Some(None),
+            _ => None,
+        })
+    }
+
     /// Retrieve TV episode info from cache
     pub fn get_tv_episode(&self, series_name: &str, season: u8, episode: u8) -> Result<Option<EpisodeTemplateData>> {
         self.get_json(
             "SELECT json_data FROM tv_episodes WHERE series_name = ?1 AND season = ?2 AND episode = ?3",
             params![series_name, season, episode],
         )
+    }
+}
+
+fn unix_now() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_subtitle_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = MediaCache::new(&dir.path().join("cache.sqlite")).unwrap();
+        let video = Path::new("/tv/Show/S01E01.mkv");
+        let week = Duration::from_secs(7 * 24 * 3600);
+
+        assert_eq!(cache.get_subtitle(video, "en", week).unwrap(), None);
+        cache.store_subtitle(video, "en", Some("1\n...")).unwrap();
+        cache.store_subtitle(video, "he", None).unwrap();
+        assert_eq!(cache.get_subtitle(video, "en", week).unwrap(), Some(Some("1\n...".to_string())));
+        assert_eq!(cache.get_subtitle(video, "he", week).unwrap(), Some(None));
+        // A stale miss is due for another lookup
+        assert_eq!(cache.get_subtitle(video, "he", Duration::ZERO).unwrap(), None);
     }
 }

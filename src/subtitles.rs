@@ -91,6 +91,8 @@ pub struct SubtitleSource {
 pub enum SubtitleOrigin {
     /// A `.srt` or `.vtt` file on disk.
     File(PathBuf),
+    /// SRT content downloaded for the video at `media_path`.
+    Downloaded { media_path: PathBuf, content: String },
 }
 
 /// A published subtitle, as used by the templates and the cast sender.
@@ -272,6 +274,7 @@ pub fn to_vtt(source: &SubtitleSource) -> io::Result<String> {
             let is_vtt = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("vtt"));
             Ok(if is_vtt { normalize_vtt(&text) } else { srt_to_vtt(&text) })
         }
+        SubtitleOrigin::Downloaded { content, .. } => Ok(srt_to_vtt(content)),
     }
 }
 
@@ -279,6 +282,9 @@ fn source_id(source: &SubtitleSource) -> u64 {
     let mut hasher = DefaultHasher::new();
     match &source.origin {
         SubtitleOrigin::File(path) => path.to_str().hash(&mut hasher),
+        SubtitleOrigin::Downloaded { media_path, .. } => {
+            ("downloaded", media_path.to_str(), &source.language).hash(&mut hasher)
+        }
     }
     hasher.finish()
 }
@@ -357,7 +363,7 @@ mod tests {
         }
         let found = find_subtitles(&movie_dir.join("Movie.2020.mp4"));
         let summary: Vec<_> = found.iter().map(|s| {
-            let SubtitleOrigin::File(p) = &s.origin;
+            let SubtitleOrigin::File(p) = &s.origin else { panic!("expected a file") };
             (p.strip_prefix(&movie_dir).unwrap().to_str().unwrap().to_string(), s.language.as_str(), s.forced, s.hearing_impaired)
         }).collect();
         assert_eq!(summary, vec![

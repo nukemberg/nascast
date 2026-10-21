@@ -32,6 +32,9 @@ nascast --movies-folder ~/Movies/Movies:movies \
 - `--cache-path`: (Optional) Path to SQLite cache file (default: ./nascast_cache.sqlite)
 - `--noop`: (Optional) Run in no-op mode (only show metadata, don't write files)
 - `--verbosity`: (Optional) Set logging verbosity level
+- `--subtitle-languages`: (Optional) Languages to download missing subtitles in, e.g. `en,he`
+- `--opensubtitles-api-key`: (Optional) OpenSubtitles API key; enables subtitle downloads (env: `OPENSUBTITLES_API_KEY`)
+- `--opensubtitles-username`, `--opensubtitles-password`: (Optional) OpenSubtitles account, for a higher daily download quota (env: `OPENSUBTITLES_USERNAME`, `OPENSUBTITLES_PASSWORD`)
 
 ## Subtitles
 
@@ -43,6 +46,12 @@ NASCast picks up `.srt` and `.vtt` files that belong to a video and publishes th
 - any subtitle in `Subs/` when the video is the only one in its folder (typical movie folders)
 
 The language comes from an ISO code (`en`, `eng`) or English name (`English`) in the file name. Files that aren't UTF-8 are decoded with the language's usual legacy encoding (e.g. windows-1255 for Hebrew).
+
+### Downloading missing subtitles
+
+With `--subtitle-languages` and an OpenSubtitles API key (create one at https://www.opensubtitles.com/consumers), `index` downloads subtitles for languages a video has no local file for. Results are matched by IMDb id (from OMDB) and preferably by the file's hash, so they're synced to that exact release. Downloads, and misses, are remembered in the cache: unchanged media makes no API calls on later runs, and misses are retried after a week.
+
+OpenSubtitles limits downloads per day (more when logged in), so a large library fills in over several runs.
 
 ### Casting with subtitles
 

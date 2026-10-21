@@ -8,7 +8,8 @@ use crate::cache::MediaCache;
 use crate::media::{playability_rank, MediaVersion};
 use crate::movie::{self, MovieInfo};
 use crate::search::{build_meta_string, generate_id, SearchIndex, SearchIndexEntry};
-use crate::subtitles::{self, SubtitleTrack};
+use crate::opensubtitles::{self, Lookup, OpenSubtitles, Query};
+use crate::subtitles::{self, SubtitleOrigin, SubtitleSource, SubtitleTrack};
 use crate::tv::{self, SeriesPageTemplateData, TvSeriesInfo, TvSeriesMediaInfo};
 
 const TEMPLATES: &[(&str, &str)] = &[
@@ -43,7 +44,14 @@ pub struct IndexConfig {
     pub cache_path: PathBuf,
     /// Only log metadata; don't write any pages.
     pub noop: bool,
+    /// Languages (ISO 639-1) to download missing subtitles in; empty disables downloads.
+    pub subtitle_languages: Vec<String>,
+    /// Enables subtitle downloads from OpenSubtitles.
+    pub opensubtitles: Option<opensubtitles::Credentials>,
 }
+
+/// How long to wait before searching OpenSubtitles again for a subtitle it didn't have.
+const RETRY_SUBTITLE_MISSES_AFTER: std::time::Duration = std::time::Duration::from_secs(7 * 24 * 3600);
 
 #[derive(Serialize)]
 struct MovieIndexInfo {
@@ -284,18 +292,100 @@ fn build_search_index(movies: &[Movie], all_tv_series: &[TvSeries]) -> SearchInd
     search_index
 }
 
-/// Finds the subtitles of every primary movie and episode file and publishes them as WebVTT.
-/// Subtitles belong to a specific file (timings differ between releases), so alternates get none.
-fn publish_subtitles(movies: &mut [Movie], all_tv_series: &mut [TvSeries], output_path: &Path) {
+/// Downloads subtitles missing from the library, remembering results (including misses) in the cache.
+struct SubtitleDownloader<'a> {
+    client: OpenSubtitles,
+    cache: Option<&'a MediaCache>,
+    languages: &'a [String],
+    quota_warned: bool,
+}
+
+impl SubtitleDownloader<'_> {
+    /// Subtitles for `video` in the configured languages that `local` doesn't already cover.
+    fn missing(&mut self, video: &Path, query: Option<Query>, local: &[SubtitleSource]) -> Vec<SubtitleSource> {
+        let Some(query) = query else {
+            return Vec::new();
+        };
+        let languages: Vec<String> = self.languages.iter()
+            .filter(|language| !local.iter().any(|s| &s.language == *language))
+            .cloned()
+            .collect();
+        languages.into_iter()
+            .filter_map(|language| {
+                let content = self.lookup(video, query, &language)?;
+                Some(SubtitleSource {
+                    origin: SubtitleOrigin::Downloaded { media_path: video.to_path_buf(), content },
+                    language,
+                    forced: false,
+                    hearing_impaired: false,
+                })
+            })
+            .collect()
+    }
+
+    fn lookup(&mut self, video: &Path, query: Query, language: &str) -> Option<String> {
+        if let Some(cache) = self.cache {
+            match cache.get_subtitle(video, language, RETRY_SUBTITLE_MISSES_AFTER) {
+                Ok(Some(cached)) => return cached,
+                Ok(None) => {}
+                Err(e) => log::warn!(target: "cli", "Failed to read subtitle cache for {:?}: {}", video, e),
+            }
+        }
+        if self.client.quota_exhausted() {
+            if !self.quota_warned {
+                log::warn!(target: "cli", "OpenSubtitles download quota used up; remaining subtitles will be fetched on a later run");
+                self.quota_warned = true;
+            }
+            return None;
+        }
+
+        let content = match self.client.find_subtitle(query, language, video) {
+            Ok(Lookup::Found(content)) => {
+                log::info!(target: "cli", "Downloaded {} subtitles for {:?}", language, video);
+                Some(content)
+            }
+            Ok(Lookup::NotFound) => {
+                log::info!(target: "cli", "No {} subtitles on OpenSubtitles for {:?}", language, video);
+                None
+            }
+            Err(e) => {
+                // Probably transient: don't remember it, so the next run retries
+                log::warn!(target: "cli", "Failed to fetch {} subtitles for {:?}: {}", language, video, e);
+                return None;
+            }
+        };
+        if let Some(cache) = self.cache {
+            if let Err(e) = cache.store_subtitle(video, language, content.as_deref()) {
+                log::error!(target: "cli", "Failed to cache subtitles for {:?}: {}", video, e);
+            }
+        }
+        content
+    }
+}
+
+/// Finds (and, if configured, downloads) the subtitles of every primary movie and episode file
+/// and publishes them as WebVTT. Subtitles belong to a specific file (timings differ between
+/// releases), so alternates get none.
+fn publish_subtitles(movies: &mut [Movie], all_tv_series: &mut [TvSeries], output_path: &Path, mut downloader: Option<SubtitleDownloader>) {
     // Start from scratch so subtitles of removed media don't linger
     let _ = std::fs::remove_dir_all(output_path.join(subtitles::SUBTITLES_DIR));
-    let publish = |path: &Path| subtitles::publish(&subtitles::find_subtitles(path), output_path);
+    let mut publish = |path: &Path, query: Option<Query>| {
+        let mut sources = subtitles::find_subtitles(path);
+        if let Some(downloader) = downloader.as_mut() {
+            let downloaded = downloader.missing(path, query, &sources);
+            sources.extend(downloaded);
+        }
+        subtitles::publish(&sources, output_path)
+    };
     for movie in movies.iter_mut() {
-        movie.subtitles = publish(&movie.info.path);
+        let query = opensubtitles::imdb_id(&movie.info.info_url).map(|imdb_id| Query::Movie { imdb_id });
+        movie.subtitles = publish(&movie.info.path, query);
     }
-    for (series, _) in all_tv_series.iter_mut() {
+    for (series, series_info) in all_tv_series.iter_mut() {
+        let series_imdb_id = series_info.as_ref().and_then(|info| opensubtitles::imdb_id(&info.info_url));
         for episode in series.episodes.iter_mut() {
-            episode.subtitles = publish(&episode.path);
+            let query = series_imdb_id.map(|series_imdb_id| Query::Episode { series_imdb_id, season: episode.season, episode: episode.episode });
+            episode.subtitles = publish(&episode.path, query);
         }
     }
 }
@@ -318,7 +408,15 @@ pub fn generate_content(config: &IndexConfig) {
     let output_path = config.output_dir.as_path();
     std::fs::create_dir_all(output_path).unwrap();
     let templates = load_templates();
-    publish_subtitles(&mut movies, &mut all_tv_series, output_path);
+    let downloader = config.opensubtitles.as_ref()
+        .filter(|_| !config.subtitle_languages.is_empty())
+        .map(|credentials| SubtitleDownloader {
+            client: OpenSubtitles::new(credentials.clone()),
+            cache,
+            languages: &config.subtitle_languages,
+            quota_warned: false,
+        });
+    publish_subtitles(&mut movies, &mut all_tv_series, output_path, downloader);
 
     // Movie detail pages
     for movie in &movies {
