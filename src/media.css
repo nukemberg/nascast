@@ -408,6 +408,16 @@ footer {
     vertical-align: middle;
     margin-right: 0.5em;
 }
+.media-versions {
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    color: #666;
+}
+.media-version-link {
+    margin-left: 0.5em;
+    color: inherit;
+    word-break: break-all;
+}
 .play-btn {
     background: none;
     border: none;

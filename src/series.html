@@ -92,7 +92,7 @@
                     <h3>Season {{season.season_number}}</h3>
                     <div class="media-episode-list">
                         {% for episode in season.episodes %}
-                        <div class="media-episode-item">
+                        <div class="media-episode-item" id="s{{season.season_number}}e{{episode.episode_number}}">
                             <a href="{{episode.media_ref}}" class="media-episode-play-btn play-btn-link" title="Play Episode">
                                 <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
                                     <circle cx="16" cy="16" r="16" fill="#222"/>
@@ -108,6 +108,12 @@
                                 </div>
                                 {% if episode.plot %}<div class="media-episode-plot">{{episode.plot}}</div>{% endif %}
                                 {% if episode.director %}<div class="media-episode-director">Directed by {{episode.director}}</div>{% endif %}
+                                {% if episode.alternates %}
+                                <div class="media-versions">
+                                    Other versions:
+                                    {% for version in episode.alternates %}<a href="{{version.media_ref}}" class="media-version-link">{{version.name}}</a>{% endfor %}
+                                </div>
+                                {% endif %}
                             </div>
                         </div>
                         {% endfor %}

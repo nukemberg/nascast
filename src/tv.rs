@@ -7,7 +7,7 @@ use regex::Regex;
 use serde::{Serialize, Deserialize};
 use url::Url;
 use crate::cache::MediaCache;
-use crate::media::{omdb_get_episode_metadata, omdb_get_metadata, rotten_tomatoes_rating, OmdbResponse, OmdbType};
+use crate::media::{omdb_get_episode_metadata, omdb_get_metadata, playability_rank, rotten_tomatoes_rating, MediaVersion, OmdbResponse, OmdbType};
 
 /// Holds information parsed directly from a TV Series folder path.
 #[derive(Serialize, Debug, PartialEq, Clone)]
@@ -64,6 +64,32 @@ impl TvSeriesMediaInfo {
         self.total_seasons = Some(info.total_seasons.clone());
         self.year = info.year;
     }
+
+    /// Absorbs the episodes of another folder holding the same series.
+    pub fn merge(&mut self, other: TvSeriesMediaInfo) {
+        self.episodes.extend(other.episodes);
+    }
+
+    /// Collapses multiple files of the same episode into one entry. The most playable file
+    /// becomes the primary one and the rest are kept as alternates. Leaves episodes sorted.
+    pub fn dedupe_episodes(&mut self) {
+        self.episodes.sort_by(|a, b| {
+            (a.season, a.episode, playability_rank(&a.path), &a.path)
+                .cmp(&(b.season, b.episode, playability_rank(&b.path), &b.path))
+        });
+        let mut deduped: Vec<TvEpisodeMediaInfo> = Vec::with_capacity(self.episodes.len());
+        for episode in self.episodes.drain(..) {
+            match deduped.last_mut() {
+                Some(primary) if (primary.season, primary.episode) == (episode.season, episode.episode) => {
+                    let media_ref = episode.media_ref.clone().unwrap_or_default();
+                    primary.alternates.push(MediaVersion::new(&episode.path, media_ref));
+                    primary.alternates.extend(episode.alternates);
+                }
+                _ => deduped.push(episode),
+            }
+        }
+        self.episodes = deduped;
+    }
 }
 
 /// Holds information parsed directly from a TV Episode video file path.
@@ -89,6 +115,8 @@ pub struct TvEpisodeMediaInfo {
     pub director: Option<String>,
     /// Play link to the episode file (relative or absolute URI)
     pub media_ref: Option<String>,
+    /// Other files of the same episode.
+    pub alternates: Vec<MediaVersion>,
 }
 
 impl TvEpisodeMediaInfo {
@@ -149,6 +177,7 @@ impl SeriesPageTemplateData {
                 aired_date: ep.air_date.clone(),
                 director: ep.director.clone(),
                 media_ref: ep.media_ref.clone().unwrap_or_default(),
+                alternates: ep.alternates.clone(),
             });
         }
         let seasons = seasons_map.into_iter()
@@ -182,6 +211,14 @@ pub struct EpisodeTemplateData {
     pub director: Option<String>,
     /// Generated URL/path to the media file for playback.
     pub media_ref: String,
+    /// Other files of the same episode. Defaulted so episodes cached before this field existed still load.
+    #[serde(default)]
+    pub alternates: Vec<MediaVersion>,
+}
+
+/// HTML id of an episode on its series page.
+pub fn episode_anchor(season: u8, episode: u8) -> String {
+    format!("s{}e{}", season, episode)
 }
 
 fn compile_all(patterns: &[&str]) -> Vec<Regex> {
@@ -271,6 +308,7 @@ pub fn parse_tv_episode_path(
         air_date: None,
         director: None,
         media_ref: None,
+        alternates: Vec::new(),
     })
 }
 
@@ -312,6 +350,18 @@ pub fn parse_series_folder_name(folder_path: &Path) -> (Option<String>, Option<u
     (Some(name).filter(|s| !s.is_empty()), None, parsed_year)
 }
 
+/// Folders holding bonus material rather than episodes.
+const NON_EPISODE_FOLDERS: &[&str] = &[
+    "extras", "featurettes", "behind the scenes", "deleted scenes",
+    "interviews", "trailers", "sample", "samples", "bonus",
+];
+
+fn is_non_episode_folder(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| NON_EPISODE_FOLDERS.contains(&name.to_lowercase().as_str()))
+}
+
 fn is_video_file(path: &Path) -> bool {
     path.is_file()
         && path.extension()
@@ -339,7 +389,8 @@ fn collect_episodes_from_folder(
 ///
 /// Supported layouts:
 /// - `<Series>/<Season folder>/<episode files>` (season taken from the folder name)
-/// - `<Series>/<other folder>/<episode files>` (season taken from file names)
+/// - `<Series>/<other folder>/<episode files>` (season taken from file names; bonus-material
+///   folders such as `Extras` are skipped)
 /// - `<Series>/<episode files>`
 /// - `<Series Season N>/<episode files>`
 pub fn scan_tv_directory(tv_base_path: &Path) -> Result<Vec<TvSeriesMediaInfo>, io::Error> {
@@ -361,7 +412,9 @@ pub fn scan_tv_directory(tv_base_path: &Path) -> Result<Vec<TvSeriesMediaInfo>, 
         } else {
             for item_entry in fs::read_dir(&series_folder_path)? {
                 let item_path = item_entry?.path();
-                if item_path.is_dir() {
+                if item_path.is_dir() && is_non_episode_folder(&item_path) {
+                    continue;
+                } else if item_path.is_dir() {
                     // Season subfolder ("Season 1", "S02") or other folder ("Extras"), in which
                     // case the season must come from file names.
                     let (_, season_from_sub_dir, _) = parse_series_folder_name(&item_path);
@@ -462,6 +515,7 @@ pub fn get_episode_info(
         director: Some(director),
         // Populated later by the caller
         media_ref: String::new(),
+        alternates: Vec::new(),
     };
 
     if let Some(media_cache) = cache {
@@ -480,7 +534,7 @@ mod tests {
     use super::*;
     use std::path::Path;
     use std::fs; // Ensure fs is imported for test setup
-    use tempfile; // Import tempfile crate
+     // Import tempfile crate
 
     fn assert_parsed_episode(
         path_str: &str,
@@ -561,6 +615,43 @@ mod tests {
         );
     }
 
+    fn episode(season: u8, episode: u8, path: &str) -> TvEpisodeMediaInfo {
+        TvEpisodeMediaInfo {
+            series_name: "Show".to_string(),
+            season,
+            episode,
+            path: PathBuf::from(path),
+            title: None,
+            plot: None,
+            imdb_rating: None,
+            air_date: None,
+            director: None,
+            media_ref: Some(format!("tv/{}", path)),
+            alternates: vec![],
+        }
+    }
+
+    #[test]
+    fn test_dedupe_episodes() {
+        let mut series = TvSeriesMediaInfo::new("Show".to_string(), None, PathBuf::from("Show"), vec![
+            episode(1, 2, "Show.S01E02.mkv"),
+            episode(1, 1, "Show.S01E01.mkv"),
+            episode(1, 1, "Show.S01E01.mp4"),
+            episode(1, 1, "Show.S01E01.avi"),
+        ]);
+        series.dedupe_episodes();
+
+        let numbers: Vec<_> = series.episodes.iter().map(|e| (e.season, e.episode)).collect();
+        assert_eq!(numbers, vec![(1, 1), (1, 2)]);
+        // mp4 is preferred as the primary file, the rest become alternates in playability order
+        assert_eq!(series.episodes[0].path, PathBuf::from("Show.S01E01.mp4"));
+        assert_eq!(series.episodes[0].alternates, vec![
+            MediaVersion { name: "Show.S01E01.mkv".to_string(), media_ref: "tv/Show.S01E01.mkv".to_string() },
+            MediaVersion { name: "Show.S01E01.avi".to_string(), media_ref: "tv/Show.S01E01.avi".to_string() },
+        ]);
+        assert!(series.episodes[1].alternates.is_empty());
+    }
+
     #[test]
     fn test_scan_tv_directory() {
         // Create a temporary directory structure for testing
@@ -578,6 +669,7 @@ mod tests {
             air_date: None,
             director: None,
             media_ref: None,
+            alternates: vec![],
         };
 
         // Series 1: Standard structure
@@ -594,6 +686,10 @@ mod tests {
         fs::create_dir_all(&s1_s02_path).unwrap();
         let s1_s2e1_path = s1_s02_path.join("Series.One.S02E01.avi");
         fs::File::create(&s1_s2e1_path).unwrap();
+        // Bonus material must not show up as episodes
+        let s1_extras_path = series1_path.join("Extras");
+        fs::create_dir_all(&s1_extras_path).unwrap();
+        fs::File::create(s1_extras_path.join("Series.One.S01E01.Featurette.mkv")).unwrap();
 
         // Series 2: Episodes directly in series folder
         let series2_folder_name = "Series Two";

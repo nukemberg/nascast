@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::error;
+use std::path::Path;
 use std::sync::LazyLock;
 use url::Url;
 
@@ -10,6 +11,34 @@ pub struct MediaInfo {
     pub name: String,
     pub year: Option<u16>,
     pub path: std::path::PathBuf
+}
+
+/// An additional file for the same movie or episode (e.g. another resolution or container).
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+pub struct MediaVersion {
+    /// File name, shown as the link label.
+    pub name: String,
+    /// Play link to the file (relative or absolute URI)
+    pub media_ref: String,
+}
+
+impl MediaVersion {
+    pub fn new(path: &Path, media_ref: String) -> Self {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        MediaVersion { name, media_ref }
+    }
+}
+
+/// Ranks a video file by how well browsers and Chromecast play its container; lower is better.
+/// Used to pick the primary file when there are several versions of the same media.
+pub fn playability_rank(path: &Path) -> u8 {
+    match path.extension().and_then(|e| e.to_str()).map(str::to_lowercase).as_deref() {
+        Some("mp4") => 0,
+        Some("webm") => 1,
+        Some("mov") => 2,
+        Some("mkv") => 3,
+        _ => 4,
+    }
 }
 
 #[derive(Debug, Deserialize)]

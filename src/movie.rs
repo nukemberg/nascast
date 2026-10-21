@@ -134,7 +134,7 @@ mod tests {
     fn test_movie_name_parsing() {
         fn assert_movie_file_info(path: &str, name: &str, year: Option<u16>) {
             let _path = Path::new(path).to_path_buf();
-            assert_eq!(parse_movie_filename(&MOVIE_PATTERNS_RE, &_path), Some(MediaInfo{path: _path, name: name.into(), year: year}));
+            assert_eq!(parse_movie_filename(&MOVIE_PATTERNS_RE, &_path), Some(MediaInfo{path: _path, name: name.into(), year}));
         }
 
         assert_movie_file_info("movies/Journey.To.The.West.Conquering.The.Demons.2013.720p.WEBRip.x264.AC3-JYK.mp4", "Journey To The West Conquering The Demons", Some(2013));

@@ -5,6 +5,7 @@ use serde::Serialize;
 use url::Url;
 
 use crate::cache::MediaCache;
+use crate::media::{playability_rank, MediaVersion};
 use crate::movie::{self, MovieInfo};
 use crate::search::{build_meta_string, generate_id, SearchIndex, SearchIndexEntry};
 use crate::tv::{self, SeriesPageTemplateData, TvSeriesInfo, TvSeriesMediaInfo};
@@ -62,6 +63,13 @@ struct TvSeriesIndexInfo {
 }
 
 type TvSeries = (TvSeriesMediaInfo, Option<TvSeriesInfo>);
+
+/// A movie with all its files; `info.path` is the primary file.
+struct Movie {
+    info: MovieInfo,
+    media_ref: String,
+    alternates: Vec<MediaVersion>,
+}
 
 fn scan_movie_files(basepath: &Path) -> Vec<PathBuf> {
     walkdir::WalkDir::new(basepath)
@@ -144,6 +152,47 @@ fn collect_movies<'a>(config: &'a IndexConfig, cache: Option<&MediaCache>) -> Ve
         .collect()
 }
 
+/// Groups files of the same movie (same IMDb entry) into one `Movie`, keeping the most
+/// playable file as primary. Movies keep the order in which they were first found.
+fn group_movies(config: &IndexConfig, found: Vec<(MovieInfo, &MediaFolder)>) -> Vec<Movie> {
+    let mut groups: Vec<Vec<(MovieInfo, &MediaFolder)>> = Vec::new();
+    for entry in found {
+        match groups.iter_mut().find(|g| g[0].0.info_url == entry.0.info_url) {
+            Some(group) => group.push(entry),
+            None => groups.push(vec![entry]),
+        }
+    }
+
+    let media_ref = |info: &MovieInfo, folder: &MediaFolder| gen_media_ref(&config.base_url, &folder.path, &folder.mount, &info.path);
+    groups.into_iter().map(|mut group| {
+        group.sort_by(|(a, _), (b, _)| (playability_rank(&a.path), &a.path).cmp(&(playability_rank(&b.path), &b.path)));
+        let mut files = group.into_iter();
+        let (info, folder) = files.next().unwrap();
+        Movie {
+            media_ref: media_ref(&info, folder),
+            alternates: files.map(|(alt, folder)| MediaVersion::new(&alt.path, media_ref(&alt, folder))).collect(),
+            info,
+        }
+    }).collect()
+}
+
+/// Merges series found under the same name in different TV folders and collapses
+/// duplicate episode files. The result is sorted by series name.
+fn merge_tv_series(found: Vec<TvSeries>) -> Vec<TvSeries> {
+    let mut merged: Vec<TvSeries> = Vec::new();
+    for (series, series_info) in found {
+        match merged.iter_mut().find(|(s, _)| s.name == series.name) {
+            Some((existing, _)) => existing.merge(series),
+            None => merged.push((series, series_info)),
+        }
+    }
+    for (series, _) in merged.iter_mut() {
+        series.dedupe_episodes();
+    }
+    merged.sort_by(|(a, _), (b, _)| a.name.cmp(&b.name));
+    merged
+}
+
 fn collect_tv_series(config: &IndexConfig, cache: Option<&MediaCache>) -> Vec<TvSeries> {
     let mut all_tv_series = Vec::new();
     for folder in &config.tv_folders {
@@ -173,15 +222,15 @@ fn collect_tv_series(config: &IndexConfig, cache: Option<&MediaCache>) -> Vec<Tv
             all_tv_series.push((series, series_info));
         }
     }
-    all_tv_series
+    merge_tv_series(all_tv_series)
 }
 
-fn build_search_index(movies: &[(MovieInfo, &MediaFolder)], all_tv_series: &[TvSeries]) -> SearchIndex {
+fn build_search_index(movies: &[Movie], all_tv_series: &[TvSeries]) -> SearchIndex {
     let mut search_index = SearchIndex::new();
 
-    for (movie, _) in movies {
+    for Movie { info: movie, .. } in movies {
         search_index.add_entry(SearchIndexEntry {
-            id: generate_id(Path::new(&movie.name), "movie"),
+            id: generate_id(&movie.path, "movie"),
             title: format!("{} ({})", movie.name, movie.year),
             year: Some(movie.year),
             media_type: "movie".to_string(),
@@ -193,7 +242,7 @@ fn build_search_index(movies: &[(MovieInfo, &MediaFolder)], all_tv_series: &[TvS
 
     for (series, series_info) in all_tv_series {
         search_index.add_entry(SearchIndexEntry {
-            id: generate_id(Path::new(&series.name), "series"),
+            id: generate_id(&series.path, "series"),
             title: year_suffixed(&series.name, series.year),
             year: series.year,
             media_type: "series".to_string(),
@@ -210,7 +259,6 @@ fn build_search_index(movies: &[(MovieInfo, &MediaFolder)], all_tv_series: &[TvS
 
     for (series, _) in all_tv_series {
         let series_page = page_name(&series.path);
-        let anchor_prefix = series.name.to_lowercase().replace(' ', "-");
         for episode in &series.episodes {
             search_index.add_entry(SearchIndexEntry {
                 id: generate_id(&episode.path, "episode"),
@@ -222,7 +270,7 @@ fn build_search_index(movies: &[(MovieInfo, &MediaFolder)], all_tv_series: &[TvS
                 ),
                 year: series.year,
                 media_type: "episode".to_string(),
-                url: format!("{}#{}-s{}e{}", series_page, anchor_prefix, episode.season, episode.episode),
+                url: format!("{}#{}", series_page, tv::episode_anchor(episode.season, episode.episode)),
                 poster_url: series_poster_url(series),
                 meta: build_meta_string(None, None, episode.director.as_deref(), None),
             });
@@ -237,12 +285,12 @@ pub fn generate_content(config: &IndexConfig) {
     let cache = open_cache(&config.cache_path);
     let cache = cache.as_ref();
 
-    let movies = collect_movies(config, cache);
+    let movies = group_movies(config, collect_movies(config, cache));
     let all_tv_series = collect_tv_series(config, cache);
 
     if config.noop {
-        for (movie, _) in &movies {
-            println!("Media: {:?}", movie);
+        for movie in &movies {
+            println!("Media: {:?}", movie.info);
         }
         return;
     }
@@ -252,11 +300,12 @@ pub fn generate_content(config: &IndexConfig) {
     let templates = load_templates();
 
     // Movie detail pages
-    for (movie, folder) in &movies {
+    for movie in &movies {
         let mut ctx = tera::Context::new();
-        ctx.insert("media_ref", &gen_media_ref(&config.base_url, &folder.path, &folder.mount, &movie.path));
-        ctx.insert("media_info", movie);
-        render(&templates, "movie.html", &ctx, &output_path.join(page_name(&movie.path)));
+        ctx.insert("media_ref", &movie.media_ref);
+        ctx.insert("media_info", &movie.info);
+        ctx.insert("alternates", &movie.alternates);
+        render(&templates, "movie.html", &ctx, &output_path.join(page_name(&movie.info.path)));
     }
 
     // Main index page
@@ -266,7 +315,7 @@ pub fn generate_content(config: &IndexConfig) {
     render(&templates, "index.html", &index_ctx, &output_path.join("index.html"));
 
     // Movies listing page
-    let movies_index: Vec<MovieIndexInfo> = movies.iter().map(|(movie, _)| MovieIndexInfo {
+    let movies_index: Vec<MovieIndexInfo> = movies.iter().map(|Movie { info: movie, .. }| MovieIndexInfo {
         name: movie.name.clone(),
         year: movie.year,
         director: movie.director.clone(),
@@ -308,7 +357,8 @@ pub fn generate_content(config: &IndexConfig) {
 mod tests {
     use std::path::Path;
     use url::Url;
-    use super::gen_media_ref;
+    use super::{gen_media_ref, merge_tv_series};
+    use crate::tv::{scan_tv_directory, TvSeriesMediaInfo};
 
     // nascast --movies-folder /media/storage/Movies:movies --base-url https://pi.nukembase
     // href - https://pi.nukembase/movies/somemovie.mp4
@@ -319,5 +369,25 @@ mod tests {
         // technically speaking, the base url should end with / or the last component isn't "the base". Might be confusing but there we are
         assert_eq!(gen_media_ref(&Url::parse("https://someserver:8080/media").ok(), Path::new("./Movies"), "movies", path), "https://someserver:8080/movies/Some%20movie%201993/some%20movie%201993.mp4");
         assert_eq!(gen_media_ref(&None, Path::new("./Movies"), "movies", path), "movies/Some%20movie%201993/some%20movie%201993.mp4");
+    }
+
+    #[test]
+    fn test_merge_tv_series_across_folders() {
+        let dirs = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
+        for (dir, file) in dirs.iter().zip(["Show.S01E01.mkv", "Show.S02E01.mkv"]) {
+            std::fs::create_dir_all(dir.path().join("Show")).unwrap();
+            std::fs::File::create(dir.path().join("Show").join(file)).unwrap();
+        }
+        let found: Vec<(TvSeriesMediaInfo, _)> = dirs.iter()
+            .flat_map(|dir| scan_tv_directory(dir.path()).unwrap())
+            .map(|series| (series, None))
+            .collect();
+        assert_eq!(found.len(), 2);
+
+        let merged = merge_tv_series(found);
+        assert_eq!(merged.len(), 1);
+        let episodes: Vec<_> = merged[0].0.episodes.iter().map(|e| (e.season, e.episode)).collect();
+        assert_eq!(episodes, vec![(1, 1), (2, 1)]);
+        assert_eq!(merged[0].0.path, dirs[0].path().join("Show"));
     }
 }

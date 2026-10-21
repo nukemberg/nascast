@@ -59,6 +59,12 @@
             </div>
             <div class="watch-controls">
                 <a href="{{media_ref}}" class="play-button-large">Play Movie</a>
+                {% if alternates %}
+                <div class="media-versions">
+                    Other versions:
+                    {% for version in alternates %}<a href="{{version.media_ref}}" class="media-version-link">{{version.name}}</a>{% endfor %}
+                </div>
+                {% endif %}
                 <div class="cast-container">
                     <google-cast-launcher></google-cast-launcher>
                     <div class="cast-status" id="state"></div>
