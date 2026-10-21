@@ -8,6 +8,7 @@ mod media;
 mod movie;
 mod search;
 mod server;
+mod subtitles;
 mod tv;
 
 use generate::{IndexConfig, MediaFolder};

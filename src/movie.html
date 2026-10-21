@@ -55,6 +55,12 @@
                         <span class="label">Language</span>
                         <span class="value">{{media_info.language}}</span>
                     </div>
+                    {% if subtitles %}
+                    <div class="info-item">
+                        <span class="label">Subtitles</span>
+                        <span class="value subtitle-links">{% for track in subtitles %}<a href="{{track.url}}" download>{{track.label}}</a>{% endfor %}</span>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
             <div class="watch-controls">

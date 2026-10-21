@@ -8,6 +8,7 @@ use crate::cache::MediaCache;
 use crate::media::{playability_rank, MediaVersion};
 use crate::movie::{self, MovieInfo};
 use crate::search::{build_meta_string, generate_id, SearchIndex, SearchIndexEntry};
+use crate::subtitles::{self, SubtitleTrack};
 use crate::tv::{self, SeriesPageTemplateData, TvSeriesInfo, TvSeriesMediaInfo};
 
 const TEMPLATES: &[(&str, &str)] = &[
@@ -69,6 +70,8 @@ struct Movie {
     info: MovieInfo,
     media_ref: String,
     alternates: Vec<MediaVersion>,
+    /// Subtitles for the primary file.
+    subtitles: Vec<SubtitleTrack>,
 }
 
 fn scan_movie_files(basepath: &Path) -> Vec<PathBuf> {
@@ -171,6 +174,7 @@ fn group_movies(config: &IndexConfig, found: Vec<(MovieInfo, &MediaFolder)>) -> 
         Movie {
             media_ref: media_ref(&info, folder),
             alternates: files.map(|(alt, folder)| MediaVersion::new(&alt.path, media_ref(&alt, folder))).collect(),
+            subtitles: Vec::new(),
             info,
         }
     }).collect()
@@ -280,13 +284,29 @@ fn build_search_index(movies: &[Movie], all_tv_series: &[TvSeries]) -> SearchInd
     search_index
 }
 
+/// Finds the subtitles of every primary movie and episode file and publishes them as WebVTT.
+/// Subtitles belong to a specific file (timings differ between releases), so alternates get none.
+fn publish_subtitles(movies: &mut [Movie], all_tv_series: &mut [TvSeries], output_path: &Path) {
+    // Start from scratch so subtitles of removed media don't linger
+    let _ = std::fs::remove_dir_all(output_path.join(subtitles::SUBTITLES_DIR));
+    let publish = |path: &Path| subtitles::publish(&subtitles::find_subtitles(path), output_path);
+    for movie in movies.iter_mut() {
+        movie.subtitles = publish(&movie.info.path);
+    }
+    for (series, _) in all_tv_series.iter_mut() {
+        for episode in series.episodes.iter_mut() {
+            episode.subtitles = publish(&episode.path);
+        }
+    }
+}
+
 /// Scans the configured folders, fetches metadata and writes the static site.
 pub fn generate_content(config: &IndexConfig) {
     let cache = open_cache(&config.cache_path);
     let cache = cache.as_ref();
 
-    let movies = group_movies(config, collect_movies(config, cache));
-    let all_tv_series = collect_tv_series(config, cache);
+    let mut movies = group_movies(config, collect_movies(config, cache));
+    let mut all_tv_series = collect_tv_series(config, cache);
 
     if config.noop {
         for movie in &movies {
@@ -298,6 +318,7 @@ pub fn generate_content(config: &IndexConfig) {
     let output_path = config.output_dir.as_path();
     std::fs::create_dir_all(output_path).unwrap();
     let templates = load_templates();
+    publish_subtitles(&mut movies, &mut all_tv_series, output_path);
 
     // Movie detail pages
     for movie in &movies {
@@ -305,6 +326,8 @@ pub fn generate_content(config: &IndexConfig) {
         ctx.insert("media_ref", &movie.media_ref);
         ctx.insert("media_info", &movie.info);
         ctx.insert("alternates", &movie.alternates);
+        ctx.insert("subtitles", &movie.subtitles);
+        ctx.insert("subtitle_languages", &subtitles::languages_of(&movie.subtitles));
         render(&templates, "movie.html", &ctx, &output_path.join(page_name(&movie.info.path)));
     }
 

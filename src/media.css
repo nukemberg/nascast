@@ -408,6 +408,15 @@ footer {
     vertical-align: middle;
     margin-right: 0.5em;
 }
+.subtitle-links a {
+    margin-right: 0.5em;
+    color: inherit;
+}
+.media-episode-subtitles {
+    margin-left: 0.75em;
+    font-size: 0.85rem;
+    color: #666;
+}
 .media-versions {
     margin-top: 0.5rem;
     font-size: 0.85rem;

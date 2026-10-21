@@ -105,6 +105,7 @@
                                     <span class="media-episode-number">E{{episode.episode_number}}</span>
                                     {% if episode.imdb_rating %}<span class="media-episode-rating">&#9733; {{episode.imdb_rating}}</span>{% endif %}
                                     {% if episode.aired_date %}<span class="media-episode-date">{{episode.aired_date}}</span>{% endif %}
+                                    {% if episode.subtitles %}<span class="media-episode-subtitles subtitle-links" title="Subtitles">CC {% for track in episode.subtitles %}<a href="{{track.url}}" download>{{track.label}}</a>{% endfor %}</span>{% endif %}
                                 </div>
                                 {% if episode.plot %}<div class="media-episode-plot">{{episode.plot}}</div>{% endif %}
                                 {% if episode.director %}<div class="media-episode-director">Directed by {{episode.director}}</div>{% endif %}

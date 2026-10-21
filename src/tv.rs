@@ -7,6 +7,7 @@ use regex::Regex;
 use serde::{Serialize, Deserialize};
 use url::Url;
 use crate::cache::MediaCache;
+use crate::subtitles::{self, SubtitleLanguage, SubtitleTrack};
 use crate::media::{omdb_get_episode_metadata, omdb_get_metadata, playability_rank, rotten_tomatoes_rating, MediaVersion, OmdbResponse, OmdbType};
 
 /// Holds information parsed directly from a TV Series folder path.
@@ -117,6 +118,8 @@ pub struct TvEpisodeMediaInfo {
     pub media_ref: Option<String>,
     /// Other files of the same episode.
     pub alternates: Vec<MediaVersion>,
+    /// Subtitles for the primary file.
+    pub subtitles: Vec<SubtitleTrack>,
 }
 
 impl TvEpisodeMediaInfo {
@@ -162,6 +165,8 @@ pub struct SeriesPageTemplateData {
     pub seasons: Vec<SeasonTemplateData>,
     /// Series name as detected from folder structure
     pub name: String,
+    /// Languages any episode has subtitles in.
+    pub subtitle_languages: Vec<SubtitleLanguage>,
 }
 
 impl SeriesPageTemplateData {
@@ -178,12 +183,14 @@ impl SeriesPageTemplateData {
                 director: ep.director.clone(),
                 media_ref: ep.media_ref.clone().unwrap_or_default(),
                 alternates: ep.alternates.clone(),
+                subtitles: ep.subtitles.clone(),
             });
         }
         let seasons = seasons_map.into_iter()
             .map(|(season_number, episodes)| SeasonTemplateData { season_number, episodes })
             .collect();
-        SeriesPageTemplateData { series_info, seasons, name: series.name.clone() }
+        let subtitle_languages = subtitles::languages_of(series.episodes.iter().flat_map(|ep| &ep.subtitles));
+        SeriesPageTemplateData { series_info, seasons, name: series.name.clone(), subtitle_languages }
     }
 }
 
@@ -214,6 +221,9 @@ pub struct EpisodeTemplateData {
     /// Other files of the same episode. Defaulted so episodes cached before this field existed still load.
     #[serde(default)]
     pub alternates: Vec<MediaVersion>,
+    /// Subtitles for `media_ref`. Defaulted for the same reason as `alternates`.
+    #[serde(default)]
+    pub subtitles: Vec<SubtitleTrack>,
 }
 
 /// HTML id of an episode on its series page.
@@ -309,6 +319,7 @@ pub fn parse_tv_episode_path(
         director: None,
         media_ref: None,
         alternates: Vec::new(),
+        subtitles: Vec::new(),
     })
 }
 
@@ -516,6 +527,7 @@ pub fn get_episode_info(
         // Populated later by the caller
         media_ref: String::new(),
         alternates: Vec::new(),
+        subtitles: Vec::new(),
     };
 
     if let Some(media_cache) = cache {
@@ -628,6 +640,7 @@ mod tests {
             director: None,
             media_ref: Some(format!("tv/{}", path)),
             alternates: vec![],
+            subtitles: vec![],
         }
     }
 
@@ -670,6 +683,7 @@ mod tests {
             director: None,
             media_ref: None,
             alternates: vec![],
+            subtitles: vec![],
         };
 
         // Series 1: Standard structure
