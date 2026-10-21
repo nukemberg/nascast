@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "nascast",
+  "project_id": "cdffd001-e7cc-4ea0-8da5-5129972c89d5"
+}
