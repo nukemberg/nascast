@@ -346,7 +346,10 @@ impl SubtitleDownloader<'_> {
 
         let content = match self.client.find_subtitle(query, language, video) {
             Ok(Lookup::Found(content)) => {
-                log::info!(target: "cli", "Downloaded {} subtitles for {:?}", language, video);
+                match self.client.remaining_downloads() {
+                    Some(remaining) => log::info!(target: "cli", "Downloaded {} subtitles for {:?} ({} downloads left today)", language, video, remaining),
+                    None => log::info!(target: "cli", "Downloaded {} subtitles for {:?}", language, video),
+                }
                 Some(content)
             }
             Ok(Lookup::NotFound) => {

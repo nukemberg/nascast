@@ -72,6 +72,8 @@ struct LoginResponse {
 #[derive(Deserialize, Debug)]
 struct LoginUser {
     remaining_downloads: Option<i64>,
+    /// Daily download limit; the real API sends this rather than `remaining_downloads`.
+    allowed_downloads: Option<i64>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -143,6 +145,11 @@ impl OpenSubtitles {
         }
     }
 
+    /// Downloads left today, as last reported by the API.
+    pub fn remaining_downloads(&self) -> Option<i64> {
+        self.remaining_downloads
+    }
+
     /// Whether the daily download quota is known to be used up.
     pub fn quota_exhausted(&self) -> bool {
         self.remaining_downloads.is_some_and(|r| r <= 0)
@@ -189,9 +196,14 @@ impl OpenSubtitles {
                 if let Some(host) = login.base_url.filter(|h| !h.is_empty() && self.api_url == DEFAULT_API_URL) {
                     self.api_url = format!("https://{}/api/v1", host);
                 }
+                let allowed_downloads = login.user.as_ref().and_then(|u| u.allowed_downloads);
                 self.remaining_downloads = login.user.and_then(|u| u.remaining_downloads);
                 self.token = Some(login.token);
-                log::info!(target: "cli", "Logged in to OpenSubtitles as {} ({:?} downloads left today)", username, self.remaining_downloads);
+                match (self.remaining_downloads, allowed_downloads) {
+                    (Some(remaining), _) => log::info!(target: "cli", "Logged in to OpenSubtitles as {} ({} downloads left today)", username, remaining),
+                    (None, Some(allowed)) => log::info!(target: "cli", "Logged in to OpenSubtitles as {} (up to {} downloads a day)", username, allowed),
+                    (None, None) => log::info!(target: "cli", "Logged in to OpenSubtitles as {}", username),
+                }
             }
             Err(e) => log::warn!(target: "cli", "OpenSubtitles login failed, using anonymous downloads: {}", e),
         }
