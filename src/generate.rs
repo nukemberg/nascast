@@ -5,6 +5,7 @@ use serde::Serialize;
 use url::Url;
 
 use crate::cache::MediaCache;
+use crate::embedded::EmbeddedSubtitles;
 use crate::media::{playability_rank, MediaVersion};
 use crate::movie::{self, MovieInfo};
 use crate::search::{build_meta_string, generate_id, SearchIndex, SearchIndexEntry};
@@ -368,11 +369,13 @@ impl SubtitleDownloader<'_> {
 /// Finds (and, if configured, downloads) the subtitles of every primary movie and episode file
 /// and publishes them as WebVTT. Subtitles belong to a specific file (timings differ between
 /// releases), so alternates get none.
-fn publish_subtitles(movies: &mut [Movie], all_tv_series: &mut [TvSeries], output_path: &Path, mut downloader: Option<SubtitleDownloader>) {
+fn publish_subtitles(movies: &mut [Movie], all_tv_series: &mut [TvSeries], output_path: &Path,
+                     embedded: &EmbeddedSubtitles, mut downloader: Option<SubtitleDownloader>) {
     // Start from scratch so subtitles of removed media don't linger
     let _ = std::fs::remove_dir_all(output_path.join(subtitles::SUBTITLES_DIR));
     let mut publish = |path: &Path, query: Option<Query>| {
         let mut sources = subtitles::find_subtitles(path);
+        sources.extend(embedded.find(path));
         if let Some(downloader) = downloader.as_mut() {
             let downloaded = downloader.missing(path, query, &sources);
             sources.extend(downloaded);
@@ -418,7 +421,7 @@ pub fn generate_content(config: &IndexConfig) {
             languages: &config.subtitle_languages,
             quota_warned: false,
         });
-    publish_subtitles(&mut movies, &mut all_tv_series, output_path, downloader);
+    publish_subtitles(&mut movies, &mut all_tv_series, output_path, &EmbeddedSubtitles::new(cache), downloader);
 
     // Movie detail pages
     for movie in &movies {

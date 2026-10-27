@@ -4,6 +4,7 @@ use std::path::Path;
 use std::fs;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::embedded::EmbeddedSubtitle;
 use crate::movie::MovieInfo;
 use crate::tv::{TvSeriesInfo, EpisodeTemplateData};
 
@@ -66,6 +67,18 @@ impl MediaCache {
                 content TEXT,
                 checked_at INTEGER NOT NULL,
                 UNIQUE(media_path, language)
+            )",
+            [],
+        )?;
+
+        // Subtitle streams extracted from a video file, for the file's size and mtime
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS embedded_subtitles (
+                id INTEGER PRIMARY KEY,
+                media_path TEXT NOT NULL UNIQUE,
+                size INTEGER NOT NULL,
+                mtime INTEGER NOT NULL,
+                json_data TEXT NOT NULL
             )",
             [],
         )?;
@@ -142,6 +155,24 @@ impl MediaCache {
             Some((None, checked_at)) if unix_now() - checked_at < retry_misses_after.as_secs() as i64 => Some(None),
             _ => None,
         })
+    }
+
+    /// Store the embedded subtitles of a video file of the given size and mtime.
+    pub fn store_embedded_subtitles(&self, media_path: &Path, size: u64, mtime: i64, subtitles: &[EmbeddedSubtitle]) -> Result<()> {
+        let json_data = serde_json::to_string(subtitles).unwrap_or_default();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO embedded_subtitles (media_path, size, mtime, json_data) VALUES (?1, ?2, ?3, ?4)",
+            params![media_path.to_string_lossy(), size as i64, mtime, json_data],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieve the embedded subtitles of a video file, if cached for this size and mtime.
+    pub fn get_embedded_subtitles(&self, media_path: &Path, size: u64, mtime: i64) -> Result<Option<Vec<EmbeddedSubtitle>>> {
+        self.get_json(
+            "SELECT json_data FROM embedded_subtitles WHERE media_path = ?1 AND size = ?2 AND mtime = ?3",
+            params![media_path.to_string_lossy(), size as i64, mtime],
+        )
     }
 
     /// Retrieve TV episode info from cache

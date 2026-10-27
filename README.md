@@ -9,7 +9,7 @@ NASCast is a minimalistic media center; it's a static page generator and the UI 
 - 🎬 Movie and TV show organization
 - 🔍 Fast search functionality
 - 📊 OMDB integration for movie/show metadata
-- 💬 Subtitles from `.srt`/`.vtt` files next to your videos
+- 💬 Subtitles from `.srt`/`.vtt` files next to your videos, embedded in them, or downloaded from OpenSubtitles
 - 🚀 Static site generation for fast loading
 - 💾 SQLite caching for improved performance
 
@@ -45,7 +45,9 @@ NASCast picks up `.srt` and `.vtt` files that belong to a video and publishes th
 - `Subs/<video name>/2_English.srt` (one folder per episode)
 - any subtitle in `Subs/` when the video is the only one in its folder (typical movie folders)
 
-The language comes from an ISO code (`en`, `eng`) or English name (`English`) in the file name. Files that aren't UTF-8 are decoded with the language's usual legacy encoding (e.g. windows-1255 for Hebrew).
+Text subtitles embedded in the video files themselves (common in MKVs) are extracted too, if `ffmpeg`/`ffprobe` are installed; their language comes from the stream's language tag. Extraction reads the whole file, so the result is cached until the file changes. Image-based subtitles (PGS, VobSub) can't be converted and are skipped.
+
+For files, the language comes from an ISO code (`en`, `eng`) or English name (`English`) in the file name. Files that aren't UTF-8 are decoded with the language's usual legacy encoding (e.g. windows-1255 for Hebrew).
 
 ### Choosing subtitles
 

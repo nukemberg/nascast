@@ -3,6 +3,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use url::Url;
 
 mod cache;
+mod embedded;
 mod generate;
 mod media;
 mod movie;

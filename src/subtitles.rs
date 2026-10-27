@@ -93,6 +93,8 @@ pub enum SubtitleOrigin {
     File(PathBuf),
     /// SRT content downloaded for the video at `media_path`.
     Downloaded { media_path: PathBuf, content: String },
+    /// A subtitle stream of the video at `media_path`, already converted to WebVTT.
+    Embedded { media_path: PathBuf, stream_index: u32, content: String },
 }
 
 /// A published subtitle, as used by the templates and the cast sender.
@@ -275,6 +277,7 @@ pub fn to_vtt(source: &SubtitleSource) -> io::Result<String> {
             Ok(if is_vtt { normalize_vtt(&text) } else { srt_to_vtt(&text) })
         }
         SubtitleOrigin::Downloaded { content, .. } => Ok(srt_to_vtt(content)),
+        SubtitleOrigin::Embedded { content, .. } => Ok(normalize_vtt(content)),
     }
 }
 
@@ -284,6 +287,9 @@ fn source_id(source: &SubtitleSource) -> u64 {
         SubtitleOrigin::File(path) => path.to_str().hash(&mut hasher),
         SubtitleOrigin::Downloaded { media_path, .. } => {
             ("downloaded", media_path.to_str(), &source.language).hash(&mut hasher)
+        }
+        SubtitleOrigin::Embedded { media_path, stream_index, .. } => {
+            ("embedded", media_path.to_str(), stream_index).hash(&mut hasher)
         }
     }
     hasher.finish()
