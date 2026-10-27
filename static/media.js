@@ -5,8 +5,9 @@
 //   data-title      title shown on the TV
 //   data-poster     poster image URL
 //   data-subtitles  JSON list of {language, label, url} subtitle tracks
-// A `data-subtitle-language` <select> chooses the subtitle language (empty value = off); the
-// choice is remembered across pages. URLs are made absolute because the Chromecast fetches
+// A `data-subtitle-language` <select> chooses the subtitle language (empty value = off). It starts
+// on the language last chosen in this browser, else the first available of its
+// `data-preferred-languages` (JSON list), else off. URLs are made absolute because the Chromecast fetches
 // media and subtitles itself (subtitle responses also need CORS headers).
 
 const cjs = new Castjs();
@@ -19,11 +20,12 @@ function absoluteUrl(url) {
     return url ? new URL(url, document.baseURI).href : '';
 }
 
+// The language chosen in this browser ('' = off), or null if none was chosen yet
 function loadLanguagePreference() {
     try {
-        return localStorage.getItem(SUBTITLE_LANGUAGE_KEY) || '';
+        return localStorage.getItem(SUBTITLE_LANGUAGE_KEY);
     } catch (e) {
-        return '';
+        return null;
     }
 }
 
@@ -95,11 +97,23 @@ document.addEventListener('click', event => {
     }
 });
 
-document.querySelectorAll('[data-subtitle-language]').forEach(select => {
-    const preferred = loadLanguagePreference();
-    if ([...select.options].some(o => o.value === preferred)) {
-        select.value = preferred;
+function initialLanguage(select) {
+    let preferred = [];
+    try {
+        preferred = JSON.parse(select.dataset.preferredLanguages || '[]');
+    } catch (e) {
+        console.log('Invalid preferred languages', e);
     }
+    const chosen = loadLanguagePreference();
+    if (chosen !== null) {
+        preferred.unshift(chosen);
+    }
+    const available = [...select.options].map(o => o.value);
+    return preferred.find(language => available.includes(language)) || '';
+}
+
+document.querySelectorAll('[data-subtitle-language]').forEach(select => {
+    select.value = initialLanguage(select);
     select.addEventListener('change', () => applySubtitleLanguage(select.value));
 });
 

@@ -44,7 +44,8 @@ pub struct IndexConfig {
     pub cache_path: PathBuf,
     /// Only log metadata; don't write any pages.
     pub noop: bool,
-    /// Languages (ISO 639-1) to download missing subtitles in; empty disables downloads.
+    /// Preferred subtitle languages (ISO 639-1), most preferred first: missing ones are downloaded,
+    /// and pages turn on the first available one by default.
     pub subtitle_languages: Vec<String>,
     /// Enables subtitle downloads from OpenSubtitles.
     pub opensubtitles: Option<opensubtitles::Credentials>,
@@ -302,12 +303,13 @@ struct SubtitleDownloader<'a> {
 
 impl SubtitleDownloader<'_> {
     /// Subtitles for `video` in the configured languages that `local` doesn't already cover.
+    /// Forced subtitles don't count: they only translate the bits in a foreign language.
     fn missing(&mut self, video: &Path, query: Option<Query>, local: &[SubtitleSource]) -> Vec<SubtitleSource> {
         let Some(query) = query else {
             return Vec::new();
         };
         let languages: Vec<String> = self.languages.iter()
-            .filter(|language| !local.iter().any(|s| &s.language == *language))
+            .filter(|language| !local.iter().any(|s| &s.language == *language && !s.forced))
             .cloned()
             .collect();
         languages.into_iter()
@@ -426,6 +428,7 @@ pub fn generate_content(config: &IndexConfig) {
         ctx.insert("alternates", &movie.alternates);
         ctx.insert("subtitles", &movie.subtitles);
         ctx.insert("subtitle_languages", &subtitles::languages_of(&movie.subtitles));
+        ctx.insert("preferred_subtitle_languages", &config.subtitle_languages);
         render(&templates, "movie.html", &ctx, &output_path.join(page_name(&movie.info.path)));
     }
 
@@ -463,6 +466,7 @@ pub fn generate_content(config: &IndexConfig) {
     for (series, series_info) in &all_tv_series {
         let mut ctx = tera::Context::new();
         ctx.insert("media_info", &SeriesPageTemplateData::new(series, series_info.clone()));
+        ctx.insert("preferred_subtitle_languages", &config.subtitle_languages);
         render(&templates, "series.html", &ctx, &output_path.join(page_name(&series.path)));
     }
 

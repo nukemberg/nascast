@@ -32,7 +32,7 @@ nascast --movies-folder ~/Movies/Movies:movies \
 - `--cache-path`: (Optional) Path to SQLite cache file (default: ./nascast_cache.sqlite)
 - `--noop`: (Optional) Run in no-op mode (only show metadata, don't write files)
 - `--verbosity`: (Optional) Set logging verbosity level
-- `--subtitle-languages`: (Optional) Languages to download missing subtitles in, e.g. `en,he`
+- `--subtitle-languages`: (Optional) Preferred subtitle languages, most preferred first, e.g. `en,he`: pages turn the first available one on, and missing ones are downloaded
 - `--opensubtitles-api-key`: (Optional) OpenSubtitles API key; enables subtitle downloads (env: `OPENSUBTITLES_API_KEY`)
 - `--opensubtitles-username`, `--opensubtitles-password`: (Optional) OpenSubtitles account, for a higher daily download quota (env: `OPENSUBTITLES_USERNAME`, `OPENSUBTITLES_PASSWORD`)
 
@@ -47,9 +47,15 @@ NASCast picks up `.srt` and `.vtt` files that belong to a video and publishes th
 
 The language comes from an ISO code (`en`, `eng`) or English name (`English`) in the file name. Files that aren't UTF-8 are decoded with the language's usual legacy encoding (e.g. windows-1255 for Hebrew).
 
+### Choosing subtitles
+
+`--subtitle-languages en,he` lists the languages you want subtitles in, most preferred first. Pages turn on the first one a video has (English if there is one, else Hebrew); a language picked on a page instead is remembered in that browser, including "Off".
+
+When a language has several subtitles, full ones come first, then SDH (for the hearing impaired), then forced ones (which only translate foreign-language parts); casting turns on the first. Forced subtitles alone don't count as having the language, so a full one is downloaded too.
+
 ### Downloading missing subtitles
 
-With `--subtitle-languages` and an OpenSubtitles API key (create one at https://www.opensubtitles.com/consumers), `index` downloads subtitles for languages a video has no local file for. Results are matched by IMDb id (from OMDB) and preferably by the file's hash, so they're synced to that exact release. Downloads, and misses, are remembered in the cache: unchanged media makes no API calls on later runs, and misses are retried after a week.
+With `--subtitle-languages` and an OpenSubtitles API key (create one at https://www.opensubtitles.com/consumers), `index` downloads subtitles in every listed language a video has no full subtitle for. Results are matched by IMDb id (from OMDB) and preferably by the file's hash, so they're synced to that exact release. Downloads, and misses, are remembered in the cache: unchanged media makes no API calls on later runs, and misses are retried after a week.
 
 OpenSubtitles limits downloads per day (more when logged in), so a large library fills in over several runs.
 

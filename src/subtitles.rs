@@ -301,8 +301,11 @@ fn label(source: &SubtitleSource) -> String {
 }
 
 /// Converts `sources` to WebVTT files under `<output_dir>/subtitles/` and returns the tracks,
-/// sorted by label. Unreadable subtitles are logged and skipped.
+/// sorted by language with full tracks first, then SDH, then forced ones (the cast sender
+/// turns on the first track of the chosen language). Unreadable subtitles are logged and skipped.
 pub fn publish(sources: &[SubtitleSource], output_dir: &Path) -> Vec<SubtitleTrack> {
+    let mut sources: Vec<&SubtitleSource> = sources.iter().collect();
+    sources.sort_by_cached_key(|s| (language_name(&s.language).to_string(), s.forced, s.hearing_impaired, source_id(s)));
     let mut tracks: Vec<SubtitleTrack> = Vec::new();
     for source in sources {
         let vtt = match to_vtt(source) {
@@ -319,7 +322,6 @@ pub fn publish(sources: &[SubtitleSource], output_dir: &Path) -> Vec<SubtitleTra
         }
         tracks.push(SubtitleTrack { language: source.language.clone(), label: label(source), url });
     }
-    tracks.sort_by(|a, b| (&a.label, &a.url).cmp(&(&b.label, &b.url)));
     // Disambiguate repeated labels: "English", "English 2", ...
     let labels: Vec<String> = tracks.iter().map(|t| t.label.clone()).collect();
     for (i, track) in tracks.iter_mut().enumerate() {
@@ -394,13 +396,24 @@ mod tests {
     #[test]
     fn test_publish() {
         let dir = tempfile::tempdir().unwrap();
-        let (a, b) = (dir.path().join("a.en.srt"), dir.path().join("b.en.srt"));
-        fs::write(&a, "1\n00:00:01,000 --> 00:00:02,000\nHi\n").unwrap();
-        fs::write(&b, "1\n00:00:01,000 --> 00:00:02,000\nHi\n").unwrap();
+        let source = |name: &str, language: &str, forced, hearing_impaired| {
+            let path = dir.path().join(name);
+            fs::write(&path, "1\n00:00:01,000 --> 00:00:02,000\nHi\n").unwrap();
+            SubtitleSource { origin: SubtitleOrigin::File(path), language: language.into(), forced, hearing_impaired }
+        };
+        let sources = [
+            source("a.en.forced.srt", "en", true, false),
+            source("b.he.srt", "he", false, false),
+            source("c.en.sdh.srt", "en", false, true),
+            source("d.en.srt", "en", false, false),
+            source("e.en.srt", "en", false, false),
+        ];
         let out = dir.path().join("out");
-        let sources = [a, b].map(|p| SubtitleSource { origin: SubtitleOrigin::File(p), language: "en".into(), forced: false, hearing_impaired: false });
         let tracks = publish(&sources, &out);
-        assert_eq!(tracks.iter().map(|t| t.label.as_str()).collect::<Vec<_>>(), vec!["English", "English 2"]);
+        // Full tracks come first within a language, so casting picks one of them
+        let labels: Vec<_> = tracks.iter().map(|t| t.label.as_str()).collect();
+        assert_eq!(&labels[..2], ["English", "English 2"]);
+        assert_eq!(&labels[2..], ["English (SDH)", "English (Forced)", "Hebrew"]);
         assert!(fs::read_to_string(out.join(&tracks[0].url)).unwrap().starts_with("WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nHi\n"));
     }
 }

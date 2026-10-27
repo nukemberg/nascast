@@ -79,7 +79,7 @@
                 <div class="cast-container">
                     {% if subtitle_languages %}
                     <label class="subtitle-select">Subtitles
-                        <select data-subtitle-language>
+                        <select data-subtitle-language data-preferred-languages="{{preferred_subtitle_languages | json_encode}}">
                             <option value="">Off</option>
                             {% for language in subtitle_languages %}<option value="{{language.code}}">{{language.name}}</option>{% endfor %}
                         </select>

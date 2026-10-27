@@ -76,7 +76,7 @@ fn cli() -> Command {
                 .arg(Arg::new("noop").long("noop").help("NoOp mode: only show metadata, does not write anything to disk").action(ArgAction::SetTrue))
                 .arg(Arg::new("verbosity").long("verbosity").short('v').action(ArgAction::Set))
                 .arg(Arg::new("subtitle-languages").long("subtitle-languages").value_delimiter(',')
-                    .help("Comma-separated languages to download missing subtitles in, e.g. en,he (requires --opensubtitles-api-key)"))
+                    .help("Preferred subtitle languages, most preferred first, e.g. en,he: pages turn the first available one on, and missing ones are downloaded when --opensubtitles-api-key is set"))
                 .arg(Arg::new("opensubtitles-api-key").long("opensubtitles-api-key").env("OPENSUBTITLES_API_KEY").hide_env_values(true)
                     .help("OpenSubtitles API (consumer) key; enables subtitle downloads"))
                 .arg(Arg::new("opensubtitles-username").long("opensubtitles-username").env("OPENSUBTITLES_USERNAME")
