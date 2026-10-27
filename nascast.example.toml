@@ -7,9 +7,6 @@ cache_path = "nascast_cache.sqlite"
 # Where the site and media are served from, as seen by browsers and the Chromecast
 # base_url = "https://nas.local/media/"
 
-# <folder>[:<mount>]: the mount is the URL path the folder is served under
-movies_folders = ["/media/Movies:movies"]
-tv_folders = ["/media/TV:tv"]
 
 [omdb]
 # Or set OMDB_API_KEY
@@ -28,3 +25,19 @@ languages = ["en", "he"]
 [webserver]
 # bind = "0.0.0.0"
 # port = 8000
+
+# Media folders, any number of each type ("movies" or "tv"). `mount` is the URL path a folder is
+# served under; it defaults to the folder's name and must be unique.
+[[folders]]
+type = "movies"
+path = "/media/Movies"
+mount = "movies"
+
+[[folders]]
+type = "movies"
+path = "/media/Kids Movies"
+
+[[folders]]
+type = "tv"
+path = "/media/TV"
+mount = "tv"

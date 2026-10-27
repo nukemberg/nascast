@@ -2,7 +2,7 @@ use std::path::{Component, Path, PathBuf};
 use rouille::Response;
 use url::Url;
 
-use crate::generate::MediaFolder;
+use crate::config::MediaFolder;
 
 fn not_found() -> Response {
     Response::html("Not found").with_status_code(404)

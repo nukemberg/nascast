@@ -18,8 +18,8 @@ NASCast is a minimalistic media center; it's a static page generator and the UI 
 Your media library and generated static files should be exposed on HTTP/HTTPS. Many NAS boxes have a built-in webserver (Or just run Nginx).
 
 ```bash
-nascast index --movies-folder ~/Movies/Movies:movies \
-    --tv-folder ~/Movies/TV:tv \
+nascast index --folder movies:/media/Movies:movies \
+    --folder tv:/media/TV:tv \
     --omdb-api-key YOUR_OMDB_API_KEY
 ```
 
@@ -29,22 +29,31 @@ Instead of flags, put a setup's settings in a TOML file: `nascast.toml` in the w
 
 ```toml
 output_folder = "pub"
-movies_folders = ["/media/Movies:movies"]
-tv_folders = ["/media/TV:tv"]
 
 [omdb]
 api_key = "YOUR_OMDB_API_KEY"
 
 [subtitles]
 languages = ["en", "he"]
+
+[[folders]]
+type = "movies"
+path = "/media/Movies"
+mount = "movies"
+
+[[folders]]
+type = "tv"
+path = "/media/TV"
+mount = "tv"
 ```
+
+Add a `[[folders]]` entry per folder, in any combination: only TV shows, two movie folders and a TV folder, and so on. `mount` is the URL path the folder is served under (defaults to the folder's name; must be unique). Sections without folders are left out of the site's navigation.
 
 Then `nascast index` and `nascast webserver` need no flags.
 
 ### Command Line Options
 
-- `--movies-folder`: Path to your movies folder (format: path:mount_point)
-- `--tv-folder`: Path to your TV shows folder (format: path:mount_point)
+- `--folder`: Media folder as `type:path[:mount]`, with type `movies` or `tv`; repeat for more folders. Replaces the config file's folders
 - `--config`, `-c`: (Optional) Config file, see above (default: `./nascast.toml` if it exists)
 - `--omdb-api-key`: Your OMDB API key for fetching movie/show metadata (env: `OMDB_API_KEY`)
 - `--base-url`: (Optional) Base URL for serving the static files

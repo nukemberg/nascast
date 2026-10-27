@@ -5,6 +5,7 @@ use serde::Serialize;
 use url::Url;
 
 use crate::cache::MediaCache;
+use crate::config::{MediaFolder, MediaKind};
 use crate::embedded::EmbeddedSubtitles;
 use crate::media::{playability_rank, MediaVersion};
 use crate::movie::{self, MovieInfo};
@@ -30,15 +31,8 @@ const STATIC_FILES: &[(&str, &str)] = &[
 
 const PLACEHOLDER_POSTER_URL: &str = "https://via.placeholder.com/300x450.png?text=No+Poster";
 
-/// A media folder on disk and the URL path segment it is served under.
-pub struct MediaFolder {
-    pub path: PathBuf,
-    pub mount: String,
-}
-
 pub struct IndexConfig {
-    pub movies_folders: Vec<MediaFolder>,
-    pub tv_folders: Vec<MediaFolder>,
+    pub folders: Vec<MediaFolder>,
     pub output_dir: PathBuf,
     pub base_url: Option<Url>,
     pub omdb_api_key: String,
@@ -130,8 +124,12 @@ fn year_suffixed(name: &str, year: Option<u16>) -> String {
     }
 }
 
-fn render(templates: &tera::Tera, template: &str, ctx: &tera::Context, output_path: &Path) {
-    let html = templates.render(template, ctx).unwrap();
+/// Renders a page; every page also gets `has_movies`/`has_tv`, so sections without any
+/// folders are left out of the navigation.
+fn render(templates: &tera::Tera, template: &str, config: &IndexConfig, mut ctx: tera::Context, output_path: &Path) {
+    ctx.insert("has_movies", &folders_of(config, MediaKind::Movies).next().is_some());
+    ctx.insert("has_tv", &folders_of(config, MediaKind::Tv).next().is_some());
+    let html = templates.render(template, &ctx).unwrap();
     std::fs::write(output_path, html).unwrap();
 }
 
@@ -154,8 +152,12 @@ fn open_cache(cache_path: &Path) -> Option<MediaCache> {
     }
 }
 
+fn folders_of(config: &IndexConfig, kind: MediaKind) -> impl Iterator<Item = &MediaFolder> {
+    config.folders.iter().filter(move |f| f.kind == kind)
+}
+
 fn collect_movies<'a>(config: &'a IndexConfig, cache: Option<&MediaCache>) -> Vec<(MovieInfo, &'a MediaFolder)> {
-    config.movies_folders.iter()
+    folders_of(config, MediaKind::Movies)
         .flat_map(|folder| {
             scan_movie_files(&folder.path).into_iter()
                 .filter_map(|file| movie::parse_movie_filename(&movie::MOVIE_PATTERNS_RE, &file))
@@ -209,7 +211,7 @@ fn merge_tv_series(found: Vec<TvSeries>) -> Vec<TvSeries> {
 
 fn collect_tv_series(config: &IndexConfig, cache: Option<&MediaCache>) -> Vec<TvSeries> {
     let mut all_tv_series = Vec::new();
-    for folder in &config.tv_folders {
+    for folder in folders_of(config, MediaKind::Tv) {
         log::info!(target: "cli", "Scanning TV folder: {:?}", folder.path);
         let series_list = match tv::scan_tv_directory(&folder.path) {
             Ok(series_list) => series_list,
@@ -432,14 +434,14 @@ pub fn generate_content(config: &IndexConfig) {
         ctx.insert("subtitles", &movie.subtitles);
         ctx.insert("subtitle_languages", &subtitles::languages_of(&movie.subtitles));
         ctx.insert("preferred_subtitle_languages", &config.subtitle_languages);
-        render(&templates, "movie.html", &ctx, &output_path.join(page_name(&movie.info.path)));
+        render(&templates, "movie.html", config, ctx, &output_path.join(page_name(&movie.info.path)));
     }
 
     // Main index page
     let mut index_ctx = tera::Context::new();
     index_ctx.insert("movie_count", &movies.len());
     index_ctx.insert("tv_count", &all_tv_series.len());
-    render(&templates, "index.html", &index_ctx, &output_path.join("index.html"));
+    render(&templates, "index.html", config, index_ctx, &output_path.join("index.html"));
 
     // Movies listing page
     let movies_index: Vec<MovieIndexInfo> = movies.iter().map(|Movie { info: movie, .. }| MovieIndexInfo {
@@ -451,7 +453,7 @@ pub fn generate_content(config: &IndexConfig) {
     }).collect();
     let mut movies_ctx = tera::Context::new();
     movies_ctx.insert("movies", &movies_index);
-    render(&templates, "movies.html", &movies_ctx, &output_path.join("movies.html"));
+    render(&templates, "movies.html", config, movies_ctx, &output_path.join("movies.html"));
 
     // TV series listing page
     let tv_series_index: Vec<TvSeriesIndexInfo> = all_tv_series.iter().map(|(series, _)| TvSeriesIndexInfo {
@@ -463,14 +465,14 @@ pub fn generate_content(config: &IndexConfig) {
     }).collect();
     let mut tv_ctx = tera::Context::new();
     tv_ctx.insert("series", &tv_series_index);
-    render(&templates, "tv.html", &tv_ctx, &output_path.join("tv.html"));
+    render(&templates, "tv.html", config, tv_ctx, &output_path.join("tv.html"));
 
     // TV series detail pages
     for (series, series_info) in &all_tv_series {
         let mut ctx = tera::Context::new();
         ctx.insert("media_info", &SeriesPageTemplateData::new(series, series_info.clone()));
         ctx.insert("preferred_subtitle_languages", &config.subtitle_languages);
-        render(&templates, "series.html", &ctx, &output_path.join(page_name(&series.path)));
+        render(&templates, "series.html", config, ctx, &output_path.join(page_name(&series.path)));
     }
 
     let search_index = build_search_index(&movies, &all_tv_series);
@@ -488,7 +490,7 @@ mod tests {
     use super::{gen_media_ref, merge_tv_series};
     use crate::tv::{scan_tv_directory, TvSeriesMediaInfo};
 
-    // nascast --movies-folder /media/storage/Movies:movies --base-url https://pi.nukembase
+    // nascast index --folder movies:/media/storage/Movies:movies --base-url https://pi.nukembase
     // href - https://pi.nukembase/movies/somemovie.mp4
     #[test]
     fn test_media_ref() {

@@ -6,16 +6,20 @@
 <div class="media-collection">
     <h1>Media Collection</h1>
     <div class="media-types">
+        {% if has_movies %}
         <a href="movies.html" class="media-type movies">
             <span class="material-icons">movie</span>
             <h2>Movies</h2>
             <p>{{ movie_count }} Movies</p>
         </a>
+        {% endif %}
+        {% if has_tv %}
         <a href="tv.html" class="media-type tv-shows">
             <span class="material-icons">tv</span>
             <h2>TV Shows</h2>
             <p>{{ tv_count }} Series</p>
         </a>
+        {% endif %}
     </div>
 </div>
 {% endblock content %}

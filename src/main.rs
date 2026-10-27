@@ -14,8 +14,8 @@ mod server;
 mod subtitles;
 mod tv;
 
-use config::Config;
-use generate::{IndexConfig, MediaFolder};
+use config::{Config, MediaFolder};
+use generate::IndexConfig;
 
 fn init_logging() {
     use log4rs::append::console::ConsoleAppender;
@@ -29,14 +29,6 @@ fn init_logging() {
     log4rs::init_config(log_config).unwrap();
 }
 
-/// Parses a `<folder>[:<mount>]` spec. Without a mount, the folder is also used as the mount.
-fn parse_folder_spec(spec: &str) -> MediaFolder {
-    let mut split = spec.split(':');
-    let path = split.next().unwrap();
-    let mount = split.next().unwrap_or(spec);
-    MediaFolder { path: PathBuf::from(path), mount: mount.to_string() }
-}
-
 fn fail(message: &str) -> ! {
     eprintln!("Error: {}", message);
     std::process::exit(1)
@@ -47,12 +39,13 @@ fn string_arg(matches: &ArgMatches, name: &str) -> Option<String> {
 }
 
 /// Folders from the command line, or else from the config file.
-fn folders_arg(matches: &ArgMatches, name: &str, configured: &[String]) -> Vec<MediaFolder> {
-    let specs: Vec<String> = match matches.get_many::<String>(name) {
-        Some(specs) => specs.cloned().collect(),
-        None => configured.to_vec(),
+fn folders_arg(matches: &ArgMatches, config: &Config) -> Vec<MediaFolder> {
+    let folders = match matches.get_many::<String>("folder") {
+        Some(specs) => specs.map(|s| MediaFolder::parse(s)).collect::<Result<Vec<_>, _>>().unwrap_or_else(|e| fail(&e)),
+        None => config.folders.clone(),
     };
-    specs.iter().map(|s| parse_folder_spec(s)).collect()
+    config::check_mounts(&folders).unwrap_or_else(|e| fail(&e));
+    folders
 }
 
 fn base_url_arg(matches: &ArgMatches, config: &Config) -> Option<Url> {
@@ -104,10 +97,8 @@ const DEFAULT_BIND: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8000;
 
 fn cli() -> Command {
-    let folder_args = [
-        Arg::new("movies-folder").long("movies-folder").action(ArgAction::Append),
-        Arg::new("tv-folder").long("tv-folder").action(ArgAction::Append),
-    ];
+    let folder_arg = Arg::new("folder").long("folder").action(ArgAction::Append).value_name("TYPE:PATH[:MOUNT]")
+        .help("Media folder (repeatable): type movies or tv, its path, and the URL path it's served under (default: the folder's name), e.g. tv:/media/TV:tv");
     Command::new("nascast")
         .about("NASCast: A tool for generating HTML pages from movies and TV shows for streaming")
         .subcommand_required(true)
@@ -116,7 +107,7 @@ fn cli() -> Command {
         .subcommand(
             Command::new("index")
                 .about("Generate HTML pages from movies and TV shows")
-                .args(folder_args.clone())
+                .arg(folder_arg.clone())
                 .arg(Arg::new("output-folder").long("output-folder").help("Where to write the site [default: ./pub]"))
                 .arg(Arg::new("base-url").long("base-url"))
                 .arg(Arg::new("omdb-api-key").long("omdb-api-key").env("OMDB_API_KEY").hide_env_values(true))
@@ -136,7 +127,7 @@ fn cli() -> Command {
         .subcommand(
             Command::new("webserver")
                 .about("Start a web server to serve the generated content")
-                .args(folder_args)
+                .arg(folder_arg)
                 .arg(Arg::new("html-folder").long("html-folder").help("Folder to serve; defaults to the config's output_folder, else ./pub"))
                 .arg(Arg::new("base-url").long("base-url"))
                 .arg(Arg::new("port").long("port").value_parser(clap::value_parser!(u16)).help("Port to run the web server on [default: 8000]"))
@@ -154,8 +145,7 @@ fn main() {
             let omdb_api_key = string_arg(matches, "omdb-api-key").or_else(|| config.omdb.api_key.clone())
                 .unwrap_or_else(|| fail("No OMDB API key: set --omdb-api-key, OMDB_API_KEY or [omdb] api_key in the config file"));
             generate::generate_content(&IndexConfig {
-                movies_folders: folders_arg(matches, "movies-folder", &config.movies_folders),
-                tv_folders: folders_arg(matches, "tv-folder", &config.tv_folders),
+                folders: folders_arg(matches, &config),
                 output_dir: output_folder_arg(matches, "output-folder", &config),
                 base_url: base_url_arg(matches, &config),
                 omdb_api_key,
@@ -170,8 +160,7 @@ fn main() {
         Some(("webserver", matches)) => {
             let html_dir = output_folder_arg(matches, "html-folder", &config);
             let port = matches.get_one::<u16>("port").copied().or(config.webserver.port).unwrap_or(DEFAULT_PORT);
-            let mut media_folders = folders_arg(matches, "movies-folder", &config.movies_folders);
-            media_folders.extend(folders_arg(matches, "tv-folder", &config.tv_folders));
+            let media_folders = folders_arg(matches, &config);
             let bind = string_arg(matches, "bind").or_else(|| config.webserver.bind.clone()).unwrap_or_else(|| DEFAULT_BIND.to_string());
             server::start_webserver(html_dir, media_folders, &bind, port, base_url_arg(matches, &config));
         }
