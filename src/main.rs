@@ -71,7 +71,7 @@ fn cli() -> Command {
                 .args(folder_args.clone())
                 .arg(Arg::new("output-folder").long("output-folder").default_value("./pub"))
                 .arg(Arg::new("base-url").long("base-url"))
-                .arg(Arg::new("omdb-api-key").long("omdb-api-key").required(true))
+                .arg(Arg::new("omdb-api-key").long("omdb-api-key").env("OMDB_API_KEY").required(true))
                 .arg(Arg::new("cache-path").long("cache-path").default_value("./nascast_cache.sqlite"))
                 .arg(Arg::new("noop").long("noop").help("NoOp mode: only show metadata, does not write anything to disk").action(ArgAction::SetTrue))
                 .arg(Arg::new("verbosity").long("verbosity").short('v').action(ArgAction::Set))
