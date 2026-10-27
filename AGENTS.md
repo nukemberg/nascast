@@ -135,5 +135,5 @@ This repository opts in to the **team-maintainer** profile: agents may commit an
 - Before committing code changes, run `cargo test` and `cargo clippy --all-targets`; don't commit with failing tests or new warnings.
 - Keep one logical change per commit, with a descriptive message (summary line, then details).
 - Push beads changes along with code (`bd dolt push`).
-- Never commit secrets or local data: `.env`, `omdb-movie.json`, `*.sqlite` caches, `pub/`.
+- Never commit secrets or local data: `.env`, `nascast.toml` (local config, may hold API keys), `omdb-movie.json`, `*.sqlite` caches, `pub/`.
 - Never force-push, rewrite pushed history, or delete branches without asking.

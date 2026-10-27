@@ -23,3 +23,4 @@ Cargo.lock
 # Local secrets and caches
 .env
 *.sqlite
+nascast.toml

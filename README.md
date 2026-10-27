@@ -18,16 +18,35 @@ NASCast is a minimalistic media center; it's a static page generator and the UI 
 Your media library and generated static files should be exposed on HTTP/HTTPS. Many NAS boxes have a built-in webserver (Or just run Nginx).
 
 ```bash
-nascast --movies-folder ~/Movies/Movies:movies \
+nascast index --movies-folder ~/Movies/Movies:movies \
     --tv-folder ~/Movies/TV:tv \
     --omdb-api-key YOUR_OMDB_API_KEY
 ```
+
+### Config file
+
+Instead of flags, put a setup's settings in a TOML file: `nascast.toml` in the working directory is read automatically, or pass `--config <file>` (env: `NASCAST_CONFIG`). Command-line flags and environment variables override it, so secrets can stay in the environment. Relative paths in the file are relative to its folder. See [`nascast.example.toml`](nascast.example.toml):
+
+```toml
+output_folder = "pub"
+movies_folders = ["/media/Movies:movies"]
+tv_folders = ["/media/TV:tv"]
+
+[omdb]
+api_key = "YOUR_OMDB_API_KEY"
+
+[subtitles]
+languages = ["en", "he"]
+```
+
+Then `nascast index` and `nascast webserver` need no flags.
 
 ### Command Line Options
 
 - `--movies-folder`: Path to your movies folder (format: path:mount_point)
 - `--tv-folder`: Path to your TV shows folder (format: path:mount_point)
-- `--omdb-api-key`: Your OMDB API key for fetching movie/show metadata
+- `--config`, `-c`: (Optional) Config file, see above (default: `./nascast.toml` if it exists)
+- `--omdb-api-key`: Your OMDB API key for fetching movie/show metadata (env: `OMDB_API_KEY`)
 - `--base-url`: (Optional) Base URL for serving the static files
 - `--cache-path`: (Optional) Path to SQLite cache file (default: ./nascast_cache.sqlite)
 - `--noop`: (Optional) Run in no-op mode (only show metadata, don't write files)

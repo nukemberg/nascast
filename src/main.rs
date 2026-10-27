@@ -1,8 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use url::Url;
 
 mod cache;
+mod config;
 mod embedded;
 mod generate;
 mod media;
@@ -13,6 +14,7 @@ mod server;
 mod subtitles;
 mod tv;
 
+use config::Config;
 use generate::{IndexConfig, MediaFolder};
 
 fn init_logging() {
@@ -35,17 +37,44 @@ fn parse_folder_spec(spec: &str) -> MediaFolder {
     MediaFolder { path: PathBuf::from(path), mount: mount.to_string() }
 }
 
-fn folders_arg(matches: &ArgMatches, name: &str) -> Vec<MediaFolder> {
-    matches.get_many::<String>(name).unwrap_or_default().map(|s| parse_folder_spec(s)).collect()
+fn fail(message: &str) -> ! {
+    eprintln!("Error: {}", message);
+    std::process::exit(1)
 }
 
-fn base_url_arg(matches: &ArgMatches) -> Option<Url> {
-    matches.get_one::<String>("base-url").and_then(|s| Url::parse(s).ok())
+fn string_arg(matches: &ArgMatches, name: &str) -> Option<String> {
+    matches.get_one::<String>(name).cloned()
 }
 
-/// Normalizes `--subtitle-languages` to ISO 639-1 codes (`eng`, `English` -> `en`).
-fn subtitle_languages_arg(matches: &ArgMatches) -> Vec<String> {
-    matches.get_many::<String>("subtitle-languages").unwrap_or_default()
+/// Folders from the command line, or else from the config file.
+fn folders_arg(matches: &ArgMatches, name: &str, configured: &[String]) -> Vec<MediaFolder> {
+    let specs: Vec<String> = match matches.get_many::<String>(name) {
+        Some(specs) => specs.cloned().collect(),
+        None => configured.to_vec(),
+    };
+    specs.iter().map(|s| parse_folder_spec(s)).collect()
+}
+
+fn base_url_arg(matches: &ArgMatches, config: &Config) -> Option<Url> {
+    match matches.get_one::<String>("base-url") {
+        Some(s) => Some(Url::parse(s).unwrap_or_else(|e| fail(&format!("Invalid --base-url {}: {}", s, e)))),
+        None => config.base_url.clone(),
+    }
+}
+
+fn output_folder_arg(matches: &ArgMatches, name: &str, config: &Config) -> PathBuf {
+    matches.get_one::<String>(name).map(PathBuf::from)
+        .or_else(|| config.output_folder.clone())
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_OUTPUT_FOLDER))
+}
+
+/// Normalizes the preferred subtitle languages to ISO 639-1 codes (`eng`, `English` -> `en`).
+fn subtitle_languages_arg(matches: &ArgMatches, config: &Config) -> Vec<String> {
+    let languages: Vec<String> = match matches.get_many::<String>("subtitle-languages") {
+        Some(languages) => languages.cloned().collect(),
+        None => config.subtitles.languages.clone(),
+    };
+    languages.iter()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
         .map(|l| match subtitles::find_language(l) {
@@ -58,6 +87,22 @@ fn subtitle_languages_arg(matches: &ArgMatches) -> Vec<String> {
         .collect()
 }
 
+fn opensubtitles_arg(matches: &ArgMatches, config: &Config) -> Option<opensubtitles::Credentials> {
+    let configured = &config.opensubtitles;
+    let api_key = string_arg(matches, "opensubtitles-api-key").or_else(|| configured.api_key.clone())?;
+    Some(opensubtitles::Credentials {
+        api_key,
+        username: string_arg(matches, "opensubtitles-username").or_else(|| configured.username.clone()),
+        password: string_arg(matches, "opensubtitles-password").or_else(|| configured.password.clone()),
+        api_url: string_arg(matches, "opensubtitles-api-url").unwrap(),
+    })
+}
+
+const DEFAULT_OUTPUT_FOLDER: &str = "./pub";
+const DEFAULT_CACHE_PATH: &str = "./nascast_cache.sqlite";
+const DEFAULT_BIND: &str = "127.0.0.1";
+const DEFAULT_PORT: u16 = 8000;
+
 fn cli() -> Command {
     let folder_args = [
         Arg::new("movies-folder").long("movies-folder").action(ArgAction::Append),
@@ -66,14 +111,16 @@ fn cli() -> Command {
     Command::new("nascast")
         .about("NASCast: A tool for generating HTML pages from movies and TV shows for streaming")
         .subcommand_required(true)
+        .arg(Arg::new("config").long("config").short('c').global(true).env("NASCAST_CONFIG")
+            .help("Config file (TOML); defaults to ./nascast.toml if it exists. Flags and environment variables override it"))
         .subcommand(
             Command::new("index")
                 .about("Generate HTML pages from movies and TV shows")
                 .args(folder_args.clone())
-                .arg(Arg::new("output-folder").long("output-folder").default_value("./pub"))
+                .arg(Arg::new("output-folder").long("output-folder").help("Where to write the site [default: ./pub]"))
                 .arg(Arg::new("base-url").long("base-url"))
-                .arg(Arg::new("omdb-api-key").long("omdb-api-key").env("OMDB_API_KEY").required(true))
-                .arg(Arg::new("cache-path").long("cache-path").default_value("./nascast_cache.sqlite"))
+                .arg(Arg::new("omdb-api-key").long("omdb-api-key").env("OMDB_API_KEY").hide_env_values(true))
+                .arg(Arg::new("cache-path").long("cache-path").help("SQLite cache file [default: ./nascast_cache.sqlite]"))
                 .arg(Arg::new("noop").long("noop").help("NoOp mode: only show metadata, does not write anything to disk").action(ArgAction::SetTrue))
                 .arg(Arg::new("verbosity").long("verbosity").short('v').action(ArgAction::Set))
                 .arg(Arg::new("subtitle-languages").long("subtitle-languages").value_delimiter(',')
@@ -90,42 +137,43 @@ fn cli() -> Command {
             Command::new("webserver")
                 .about("Start a web server to serve the generated content")
                 .args(folder_args)
-                .arg(Arg::new("html-folder").long("html-folder").default_value("./pub"))
+                .arg(Arg::new("html-folder").long("html-folder").help("Folder to serve; defaults to the config's output_folder, else ./pub"))
                 .arg(Arg::new("base-url").long("base-url"))
-                .arg(Arg::new("port").long("port").default_value("8000").help("Port to run the web server on"))
-                .arg(Arg::new("bind").long("bind").default_value("127.0.0.1").help("Address to listen on; use 0.0.0.0 so a Chromecast on the network can reach it"))
+                .arg(Arg::new("port").long("port").value_parser(clap::value_parser!(u16)).help("Port to run the web server on [default: 8000]"))
+                .arg(Arg::new("bind").long("bind").help("Address to listen on; use 0.0.0.0 so a Chromecast on the network can reach it [default: 127.0.0.1]"))
         )
 }
 
 fn main() {
     init_logging();
 
-    match cli().get_matches().subcommand() {
+    let matches = cli().get_matches();
+    let config = Config::find(matches.get_one::<String>("config").map(Path::new)).unwrap_or_else(|e| fail(&e));
+    match matches.subcommand() {
         Some(("index", matches)) => {
+            let omdb_api_key = string_arg(matches, "omdb-api-key").or_else(|| config.omdb.api_key.clone())
+                .unwrap_or_else(|| fail("No OMDB API key: set --omdb-api-key, OMDB_API_KEY or [omdb] api_key in the config file"));
             generate::generate_content(&IndexConfig {
-                movies_folders: folders_arg(matches, "movies-folder"),
-                tv_folders: folders_arg(matches, "tv-folder"),
-                output_dir: PathBuf::from(matches.get_one::<String>("output-folder").unwrap()),
-                base_url: base_url_arg(matches),
-                omdb_api_key: matches.get_one::<String>("omdb-api-key").unwrap().clone(),
-                cache_path: PathBuf::from(matches.get_one::<String>("cache-path").unwrap()),
+                movies_folders: folders_arg(matches, "movies-folder", &config.movies_folders),
+                tv_folders: folders_arg(matches, "tv-folder", &config.tv_folders),
+                output_dir: output_folder_arg(matches, "output-folder", &config),
+                base_url: base_url_arg(matches, &config),
+                omdb_api_key,
+                cache_path: matches.get_one::<String>("cache-path").map(PathBuf::from)
+                    .or_else(|| config.cache_path.clone())
+                    .unwrap_or_else(|| PathBuf::from(DEFAULT_CACHE_PATH)),
                 noop: matches.get_flag("noop"),
-                subtitle_languages: subtitle_languages_arg(matches),
-                opensubtitles: matches.get_one::<String>("opensubtitles-api-key").map(|api_key| opensubtitles::Credentials {
-                    api_key: api_key.clone(),
-                    username: matches.get_one::<String>("opensubtitles-username").cloned(),
-                    password: matches.get_one::<String>("opensubtitles-password").cloned(),
-                    api_url: matches.get_one::<String>("opensubtitles-api-url").unwrap().clone(),
-                }),
+                subtitle_languages: subtitle_languages_arg(matches, &config),
+                opensubtitles: opensubtitles_arg(matches, &config),
             });
         }
         Some(("webserver", matches)) => {
-            let html_dir = PathBuf::from(matches.get_one::<String>("html-folder").unwrap());
-            let port = matches.get_one::<String>("port").unwrap().parse::<u16>().expect("Port must be a number");
-            let mut media_folders = folders_arg(matches, "movies-folder");
-            media_folders.extend(folders_arg(matches, "tv-folder"));
-            let bind = matches.get_one::<String>("bind").unwrap();
-            server::start_webserver(html_dir, media_folders, bind, port, base_url_arg(matches));
+            let html_dir = output_folder_arg(matches, "html-folder", &config);
+            let port = matches.get_one::<u16>("port").copied().or(config.webserver.port).unwrap_or(DEFAULT_PORT);
+            let mut media_folders = folders_arg(matches, "movies-folder", &config.movies_folders);
+            media_folders.extend(folders_arg(matches, "tv-folder", &config.tv_folders));
+            let bind = string_arg(matches, "bind").or_else(|| config.webserver.bind.clone()).unwrap_or_else(|| DEFAULT_BIND.to_string());
+            server::start_webserver(html_dir, media_folders, &bind, port, base_url_arg(matches, &config));
         }
         // subcommand_required(true) makes this unreachable
         _ => unreachable!(),

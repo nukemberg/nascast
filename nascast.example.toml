@@ -1,0 +1,30 @@
+# NASCast config. Copy to nascast.toml (read automatically from the working directory) or pass
+# --config <file>. Command-line flags and environment variables override these values.
+# Relative paths are relative to this file's folder.
+
+output_folder = "pub"
+cache_path = "nascast_cache.sqlite"
+# Where the site and media are served from, as seen by browsers and the Chromecast
+# base_url = "https://nas.local/media/"
+
+# <folder>[:<mount>]: the mount is the URL path the folder is served under
+movies_folders = ["/media/Movies:movies"]
+tv_folders = ["/media/TV:tv"]
+
+[omdb]
+# Or set OMDB_API_KEY
+api_key = "YOUR_OMDB_API_KEY"
+
+[subtitles]
+# Preferred subtitle languages, most preferred first
+languages = ["en", "he"]
+
+[opensubtitles]
+# Enables downloading missing subtitles; or set OPENSUBTITLES_API_KEY etc.
+# api_key = "YOUR_OPENSUBTITLES_API_KEY"
+# username = "you"
+# password = "secret"
+
+[webserver]
+# bind = "0.0.0.0"
+# port = 8000
