@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde::{Serialize, Deserialize};
 use url::Url;
-use crate::media::{omdb_get_metadata, rotten_tomatoes_rating, MediaInfo, OmdbResponse, OmdbType};
+use crate::media::{omdb_find, poster_url, rotten_tomatoes_rating, MediaInfo, OmdbResponse, OmdbType};
 use crate::cache::MediaCache;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -27,38 +27,67 @@ pub struct MovieInfo {
     pub rotten_tomatoes_rating: Option<String>
 }
 
-pub static MOVIE_PATTERNS_RE: LazyLock<Vec<Regex>> = LazyLock::new(|| [
-    r"(?P<name>[a-zA-Z0-9'.]+)\.(?P<year>(?:19|20)\d{2})\..*",
-    r"(?P<name>[a-zA-Z0-9' ]+) [\[\()](?P<year>(?:19|20)\d{2})[\]\)].*",
-    r"\[[\w\s]]\s+-\s+(?:\(\w+\)\.)?(?P<name>[a-zA-Z0-9.']+)\.(?P<year>(?:19|20)\d{2})\..*",
-    r"\[[\w\s]]\s+-\s+(?:\(\w+\) )?(?P<name>[a-zA-Z0-9' ]+) [\[\(](?P<year>(?:19|20)\d{2})[\]\)].*",
-    r"(?P<name>[a-zA-Z0-9' ]+) (?P<year>(?:19|20)\d{2}).*",
-].iter().map(|pattern| Regex::new(pattern).unwrap()).collect());
+/// A year in a name: 19xx/20xx as a whole word, optionally in brackets.
+static YEAR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[\[(]?\b((?:19|20)\d{2})\b[\])]?").unwrap());
+/// Junk before the title: `[Group] - `, `(Tag).`, `www.site.com - `.
+static PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:\s*\[[^\]]*\]\s*(?:-\s*)?|\s*\([^)]*\)\.|\s*www\.\S+\s+-\s+)+").unwrap()
+});
+/// A parenthesized aside at the end of a title, e.g. an original title.
+static TRAILING_ASIDE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s*\([^)]*\)$").unwrap());
 
-pub fn parse_movie_filename(regexs: &[Regex], path: &Path) -> Option<MediaInfo> {
-    let filename = path.file_stem()?.to_str()?;
-    let filename_match = regexs.iter().find_map(|re| re.captures(filename))?;
-    let name = {
-        let n = filename_match.name("name")?.as_str();
-        if !n.contains(' ') && n.contains('.') {
-            n.replace('.', " ")
-        } else {
-            n.to_owned()
-        }
+/// Parses a title and year from a file or folder name such as `Movie.Name.2013.720p.x264`,
+/// `Movie Name (2013) [1080p]` or `[Group] - Movie Name 2013 BluRay`. The year is the first
+/// bracketed one, else the first one after the start (so "2001 A Space Odyssey 1968" works).
+pub fn parse_title(name: &str) -> Option<(String, Option<u16>)> {
+    let name = PREFIX_RE.replace(name, "");
+    let name = if name.contains(' ') { name.into_owned() } else { name.replace(['.', '_'], " ") };
+    let years: Vec<_> = YEAR_RE.captures_iter(&name).filter(|c| c.get(0).unwrap().start() > 0).collect();
+    let year_match = years.iter().find(|c| c.get(0).unwrap().as_str().len() > 4).or(years.first());
+    let (title, year) = match year_match {
+        Some(c) => (&name[..c.get(0).unwrap().start()], c[1].parse().ok()),
+        None => (name.as_str(), None),
     };
-    let year = filename_match.name("year").and_then(|s| s.as_str().parse::<u16>().ok());
+    let title = title.trim_matches(|c: char| c.is_whitespace() || "-.([_".contains(c));
+    let title = TRAILING_ASIDE_RE.replace(title, "").trim().to_string();
+    (!title.is_empty()).then_some((title, year))
+}
 
+/// Works out a movie's title and year from its path: from the file name, or from the folder
+/// it's in (below `root`) when the file name has no year.
+pub fn parse_movie_path(path: &Path, root: &Path) -> Option<MediaInfo> {
+    let from_file = path.file_stem().and_then(|s| s.to_str()).and_then(parse_title);
+    let from_folder = || {
+        let parent = path.parent().filter(|p| *p != root)?;
+        parse_title(parent.file_name()?.to_str()?)
+    };
+    let (name, year) = match from_file {
+        Some((name, Some(year))) => (name, Some(year)),
+        from_file => from_folder().filter(|(_, year)| year.is_some()).or(from_folder()).or(from_file)?,
+    };
     log::info!(target: "cli", "Media file discovered: {name:?} ({path:?})");
-
     Some(MediaInfo { name, year, path: path.to_owned() })
 }
 
+/// Whether a file is a sample/trailer clip rather than the movie itself.
+pub fn is_sample(path: &Path) -> bool {
+    path.components().rev().take(2).any(|c| {
+        c.as_os_str().to_str().is_some_and(|s| {
+            s.split(|c: char| !c.is_alphanumeric()).any(|w| w.eq_ignore_ascii_case("sample"))
+        })
+    })
+}
+
+/// Bumped when movie matching changes, so movies cached with an older (possibly wrong)
+/// match are looked up again.
+const MATCHING_VERSION: u32 = 2;
+
 /// Cache key for a movie file. Note: this hashes the `PathBuf` itself, which differs from
-/// the page-name hash; keep it stable so existing caches stay valid.
+/// the page-name hash.
 fn movie_cache_key(path: &PathBuf) -> String {
     let mut hasher = DefaultHasher::new();
     path.hash(&mut hasher);
-    hasher.finish().to_string()
+    format!("{}.v{}", hasher.finish(), MATCHING_VERSION)
 }
 
 /// Looks up movie metadata, preferring the cache and falling back to OMDB. Failures are logged.
@@ -88,7 +117,7 @@ fn get_movie_info(
     cache: Option<&MediaCache>,
     path_hash: &str,
 ) -> Result<MovieInfo, Box<dyn std::error::Error>> {
-    let r = omdb_get_metadata(omdb_api_key, OmdbType::Movie, &movie_file_info.name, movie_file_info.year)?;
+    let r = omdb_find(omdb_api_key, OmdbType::Movie, &movie_file_info.name, movie_file_info.year)?;
     let info_url = r.imdb_url();
     let OmdbResponse::Movie {
         title, year, director, poster, language, plot, genre,
@@ -101,7 +130,7 @@ fn get_movie_info(
         name: title,
         year: year.parse()?,
         director,
-        poster_url: Url::parse(&poster)?,
+        poster_url: poster_url(&poster),
         language,
         plot,
         info_url,
@@ -126,22 +155,48 @@ fn get_movie_info(
 
 #[cfg(test)]
 mod tests {
-    use crate::movie::{parse_movie_filename, MOVIE_PATTERNS_RE};
-    use crate::media::MediaInfo;
-    use std::path::Path;
+    use super::*;
 
     #[test]
-    fn test_movie_name_parsing() {
-        fn assert_movie_file_info(path: &str, name: &str, year: Option<u16>) {
-            let _path = Path::new(path).to_path_buf();
-            assert_eq!(parse_movie_filename(&MOVIE_PATTERNS_RE, &_path), Some(MediaInfo{path: _path, name: name.into(), year}));
+    fn test_parse_title() {
+        let cases = [
+            ("Journey.To.The.West.Conquering.The.Demons.2013.720p.WEBRip.x264.AC3-JYK", "Journey To The West Conquering The Demons", Some(2013)),
+            ("Man On The Moon (1999) [1080p]", "Man On The Moon", Some(1999)),
+            ("Movie.43.2013.1080p.BRrip.x264.GAZ", "Movie 43", Some(2013)),
+            ("The Kick [2011].x264.DVDrip(MartialArts)", "The Kick", Some(2011)),
+            ("Tropic Thunder 2008 Unrated DC 1080p BluRay HEVC H265 5.1 BONE", "Tropic Thunder", Some(2008)),
+            ("Lesbian Vampire Killers 2009 720p BluRay x264 AAC-Mkvking", "Lesbian Vampire Killers", Some(2009)),
+            ("[Group] - (Tag).Some.Movie.2013.720p", "Some Movie", Some(2013)),
+            ("Liquid Sky - Sc-Fi 1982 Eng Rus Multi Subs 720p [H264-mp4]", "Liquid Sky - Sc-Fi", Some(1982)),
+            ("The Brotherhood Of War (Tae Guk Gi) 2004 DC 720p BRRip", "The Brotherhood Of War", Some(2004)),
+            ("Popstar Never Stop Never Stopping (2016) (1080p BluRay x265 t3nzin)", "Popstar Never Stop Never Stopping", Some(2016)),
+            ("A.Real.Pain.2024.1080p.WEBRip.10Bit.DDP5.1.x265-Asiimov", "A Real Pain", Some(2024)),
+            ("Orgazmo.1997.720p.WEB-DL.AAC2.0.H.264", "Orgazmo", Some(1997)),
+            ("www.Torrenting.com - Tristram Shandy A Cock and Bull Story 2005 1080p AMZN WEB-DL DDP2 0 H 264-NTb", "Tristram Shandy A Cock and Bull Story", Some(2005)),
+            ("Blade Runner 2049 (2017) 1080p", "Blade Runner 2049", Some(2017)),
+            ("2001 A Space Odyssey 1968", "2001 A Space Odyssey", Some(1968)),
+            ("Tromeo and Juliet", "Tromeo and Juliet", None),
+        ];
+        for (name, title, year) in cases {
+            assert_eq!(parse_title(name), Some((title.to_string(), year)), "{}", name);
         }
+    }
 
-        assert_movie_file_info("movies/Journey.To.The.West.Conquering.The.Demons.2013.720p.WEBRip.x264.AC3-JYK.mp4", "Journey To The West Conquering The Demons", Some(2013));
-        assert_movie_file_info("movies/Man On The Moon (1999) [1080p].mp4", "Man On The Moon", Some(1999));
-        assert_movie_file_info("Movies/Movie 43 (2013) [1080p]/Movie.43.2013.1080p.BRrip.x264.GAZ.mp4", "Movie 43", Some(2013));
-        assert_movie_file_info("Movies/The Kick [2011].x264.DVDrip(MartialArts).mp4", "The Kick", Some(2011));
-        assert_movie_file_info("Movies/Tropic Thunder 2008 Unrated DC 1080p BluRay HEVC H265 5.1 BONE.mp4", "Tropic Thunder", Some(2008));
-        assert_movie_file_info("Lesbian Vampire Killers 2009 720p BluRay x264 AAC-Mkvking.mkv", "Lesbian Vampire Killers", Some(2009));
+    #[test]
+    fn test_parse_movie_path() {
+        let root = Path::new("/Movies");
+        let parse = |p: &str| parse_movie_path(Path::new(p), root).map(|m| (m.name, m.year));
+        assert_eq!(parse("/Movies/Tromeo and Juliet/tromeo.and.juliet.dual.audio-rtl.avi"), Some(("Tromeo and Juliet".into(), None)));
+        assert_eq!(parse("/Movies/Calvary (2014) [1080p]/Calvary.2014.1080p.BluRay.x264.YIFY.mp4"), Some(("Calvary".into(), Some(2014))));
+        assert_eq!(parse("/Movies/Some Movie (2010)/movie.mkv"), Some(("Some Movie".into(), Some(2010))));
+        assert_eq!(parse("/Movies/The Haunted World of El Superbeasto (2009).avi"), Some(("The Haunted World of El Superbeasto".into(), Some(2009))));
+    }
+
+    #[test]
+    fn test_is_sample() {
+        assert!(is_sample(Path::new("/Movies/Warrior/Warrior.2011.1080p.BluRay.x264.AC3-ETRG.Sample.mp4")));
+        assert!(is_sample(Path::new("/Movies/Warrior/Sample/warrior.mkv")));
+        assert!(!is_sample(Path::new("/Movies/Warrior/Warrior.2011.1080p.BluRay.x264.AC3-ETRG.mp4")));
+        assert!(!is_sample(Path::new("/Movies/Samples of Life (2001)/Samples.of.Life.mp4")));
     }
 }

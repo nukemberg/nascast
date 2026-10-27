@@ -7,7 +7,7 @@ use url::Url;
 use crate::cache::MediaCache;
 use crate::config::{MediaFolder, MediaKind};
 use crate::embedded::EmbeddedSubtitles;
-use crate::media::{playability_rank, MediaVersion};
+use crate::media::{playability_rank, MediaVersion, PLACEHOLDER_POSTER_URL};
 use crate::movie::{self, MovieInfo};
 use crate::search::{build_meta_string, generate_id, SearchIndex, SearchIndexEntry};
 use crate::opensubtitles::{self, Lookup, OpenSubtitles, Query};
@@ -29,7 +29,6 @@ const STATIC_FILES: &[(&str, &str)] = &[
     ("search.js", include_str!("../static/search.js")),
 ];
 
-const PLACEHOLDER_POSTER_URL: &str = "https://via.placeholder.com/300x450.png?text=No+Poster";
 
 pub struct IndexConfig {
     pub folders: Vec<MediaFolder>,
@@ -78,14 +77,31 @@ struct Movie {
     subtitles: Vec<SubtitleTrack>,
 }
 
+/// Video files smaller than this are samples or release-group promos, not movies.
+const MIN_MOVIE_SIZE: u64 = 50 * 1024 * 1024;
+
+fn file_size(path: &Path) -> u64 {
+    std::fs::metadata(path).map_or(0, |m| m.len())
+}
+
+/// Video files in a movies folder and its subfolders, skipping samples and promo clips.
+/// Sorted for a stable order.
 fn scan_movie_files(basepath: &Path) -> Vec<PathBuf> {
-    walkdir::WalkDir::new(basepath)
+    let mut files: Vec<PathBuf> = walkdir::WalkDir::new(basepath)
         .max_depth(2)
         .into_iter()
         .filter_map(|entry| entry.ok().map(|e| e.into_path()))
-        .filter(|path| path.is_file())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "mp4"))
-        .collect()
+        .filter(|path| subtitles::is_video_file(path) && !movie::is_sample(path))
+        .filter(|path| {
+            let big_enough = file_size(path) >= MIN_MOVIE_SIZE;
+            if !big_enough {
+                log::info!(target: "cli", "Skipping {:?}: too small to be a movie", path);
+            }
+            big_enough
+        })
+        .collect();
+    files.sort();
+    files
 }
 
 /// Builds the link used to play a media file, either relative or under `base_url`.
@@ -160,7 +176,7 @@ fn collect_movies<'a>(config: &'a IndexConfig, cache: Option<&MediaCache>) -> Ve
     folders_of(config, MediaKind::Movies)
         .flat_map(|folder| {
             scan_movie_files(&folder.path).into_iter()
-                .filter_map(|file| movie::parse_movie_filename(&movie::MOVIE_PATTERNS_RE, &file))
+                .filter_map(|file| movie::parse_movie_path(&file, &folder.path))
                 .filter_map(|info| movie::get_movie_info_logged(&config.omdb_api_key, info, cache).ok())
                 .map(move |info| (info, folder))
         })
@@ -168,7 +184,8 @@ fn collect_movies<'a>(config: &'a IndexConfig, cache: Option<&MediaCache>) -> Ve
 }
 
 /// Groups files of the same movie (same IMDb entry) into one `Movie`, keeping the most
-/// playable file as primary. Movies keep the order in which they were first found.
+/// playable file as primary, and the largest among equally playable ones. Movies keep the
+/// order in which they were first found.
 fn group_movies(config: &IndexConfig, found: Vec<(MovieInfo, &MediaFolder)>) -> Vec<Movie> {
     let mut groups: Vec<Vec<(MovieInfo, &MediaFolder)>> = Vec::new();
     for entry in found {
@@ -180,7 +197,7 @@ fn group_movies(config: &IndexConfig, found: Vec<(MovieInfo, &MediaFolder)>) -> 
 
     let media_ref = |info: &MovieInfo, folder: &MediaFolder| gen_media_ref(&config.base_url, &folder.path, &folder.mount, &info.path);
     groups.into_iter().map(|mut group| {
-        group.sort_by(|(a, _), (b, _)| (playability_rank(&a.path), &a.path).cmp(&(playability_rank(&b.path), &b.path)));
+        group.sort_by_cached_key(|(info, _)| (playability_rank(&info.path), std::cmp::Reverse(file_size(&info.path)), info.path.clone()));
         let mut files = group.into_iter();
         let (info, folder) = files.next().unwrap();
         Movie {
@@ -229,8 +246,9 @@ fn collect_tv_series(config: &IndexConfig, cache: Option<&MediaCache>) -> Vec<Tv
             if let Some(info) = &series_info {
                 series.apply_series_info(info);
             }
+            let series_imdb_id = series_info.as_ref().and_then(|info| info.info_url.path_segments()?.rfind(|s| !s.is_empty()).map(str::to_string));
             for episode in series.episodes.iter_mut() {
-                if let Ok(ep_info) = tv::get_episode_info(&config.omdb_api_key, &series.name, episode.season, episode.episode, cache) {
+                if let Ok(ep_info) = tv::get_episode_info(&config.omdb_api_key, &series.name, series_imdb_id.as_deref(), episode.season, episode.episode, cache) {
                     episode.apply_episode_info(ep_info);
                 }
                 episode.media_ref = Some(gen_media_ref(&config.base_url, &folder.path, &folder.mount, &episode.path));
@@ -485,6 +503,27 @@ pub fn generate_content(config: &IndexConfig) {
     for (name, content) in STATIC_FILES {
         std::fs::write(output_path.join(name), content).unwrap();
     }
+
+    let pages: Vec<String> = movies.iter().map(|m| page_name(&m.info.path))
+        .chain(all_tv_series.iter().map(|(series, _)| page_name(&series.path)))
+        .collect();
+    remove_stale_pages(output_path, &pages);
+}
+
+/// Deletes detail pages (`<hash>.html`) left by earlier runs for media that's gone or now
+/// grouped differently. Other files in the output folder are left alone.
+fn remove_stale_pages(output_path: &Path, pages: &[String]) {
+    let Ok(entries) = std::fs::read_dir(output_path) else { return };
+    for path in entries.filter_map(|e| e.ok().map(|e| e.path())) {
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        let is_detail_page = name.strip_suffix(".html").is_some_and(|stem| !stem.is_empty() && stem.chars().all(|c| c.is_ascii_digit()));
+        if is_detail_page && !pages.iter().any(|p| p == name) {
+            log::info!(target: "cli", "Removing stale page {}", name);
+            if let Err(e) = std::fs::remove_file(&path) {
+                log::warn!(target: "cli", "Failed to remove stale page {:?}: {}", path, e);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -503,6 +542,18 @@ mod tests {
         // technically speaking, the base url should end with / or the last component isn't "the base". Might be confusing but there we are
         assert_eq!(gen_media_ref(&Url::parse("https://someserver:8080/media").ok(), Path::new("./Movies"), "movies", path), "https://someserver:8080/movies/Some%20movie%201993/some%20movie%201993.mp4");
         assert_eq!(gen_media_ref(&None, Path::new("./Movies"), "movies", path), "movies/Some%20movie%201993/some%20movie%201993.mp4");
+    }
+
+    #[test]
+    fn test_remove_stale_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["123.html", "456.html", "index.html", "notes.txt"] {
+            std::fs::write(dir.path().join(name), "").unwrap();
+        }
+        super::remove_stale_pages(dir.path(), &["123.html".to_string()]);
+        let mut left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        left.sort();
+        assert_eq!(left, vec!["123.html", "index.html", "notes.txt"]);
     }
 
     #[test]

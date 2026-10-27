@@ -64,6 +64,10 @@ Then `nascast index` and `nascast webserver` need no flags.
 - `--opensubtitles-api-key`: (Optional) OpenSubtitles API key; enables subtitle downloads (env: `OPENSUBTITLES_API_KEY`)
 - `--opensubtitles-username`, `--opensubtitles-password`: (Optional) OpenSubtitles account, for a higher daily download quota (env: `OPENSUBTITLES_USERNAME`, `OPENSUBTITLES_PASSWORD`)
 
+### Movie folders
+
+Movie files can sit directly in a movies folder or one folder down (`Movies/Some Movie (2010)/movie.mkv`). The title and year come from the file name, or from the folder name when the file name has no year. Samples and video files under 50 MB (release-group promos) are skipped. Several files of the same movie become one page, playing the most browser-friendly (then largest) file.
+
 ## Subtitles
 
 NASCast picks up `.srt` and `.vtt` files that belong to a video and publishes them as WebVTT (the only format browsers and Chromecast read) under `subtitles/` in the output folder. Supported layouts:

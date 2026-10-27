@@ -133,7 +133,7 @@ fn is_subtitle_file(path: &Path) -> bool {
             .is_some_and(|ext| matches!(ext.to_lowercase().as_str(), "srt" | "vtt"))
 }
 
-fn is_video_file(path: &Path) -> bool {
+pub fn is_video_file(path: &Path) -> bool {
     path.is_file()
         && path.extension()
             .and_then(|e| e.to_str())

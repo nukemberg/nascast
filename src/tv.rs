@@ -8,7 +8,7 @@ use serde::{Serialize, Deserialize};
 use url::Url;
 use crate::cache::MediaCache;
 use crate::subtitles::{self, SubtitleLanguage, SubtitleTrack};
-use crate::media::{omdb_get_episode_metadata, omdb_get_metadata, playability_rank, rotten_tomatoes_rating, MediaVersion, OmdbResponse, OmdbType};
+use crate::media::{omdb_find, omdb_get_episode_metadata, playability_rank, poster_url, rotten_tomatoes_rating, MediaVersion, OmdbResponse, OmdbType, SeriesRef};
 
 /// Holds information parsed directly from a TV Series folder path.
 #[derive(Serialize, Debug, PartialEq, Clone)]
@@ -458,7 +458,7 @@ pub fn get_series_info(
     }
 
     log::info!(target: "cli", "Cache miss for TV series: {}. Fetching from OMDB.", series_name);
-    let r = omdb_get_metadata(omdb_api_key, OmdbType::Series, series_name, None)?;
+    let r = omdb_find(omdb_api_key, OmdbType::Series, series_name, None)?;
     let info_url = r.imdb_url();
     let OmdbResponse::Series {
         title, year, director, poster, language, country, plot, genre,
@@ -473,7 +473,7 @@ pub fn get_series_info(
         year: year.split(|c: char| !c.is_ascii_digit()).next().and_then(|s| s.parse().ok()),
         director,
         info_url,
-        poster_url: Url::parse(&poster)?,
+        poster_url: poster_url(&poster),
         language,
         country,
         plot,
@@ -496,9 +496,12 @@ pub fn get_series_info(
     Ok(series_info)
 }
 
+/// Episode metadata, cached under `series_name`. Looked up by the series' IMDb id when known,
+/// since the folder name may not be the series title OMDB knows.
 pub fn get_episode_info(
     omdb_api_key: &str,
     series_name: &str,
+    series_imdb_id: Option<&str>,
     season: u8,
     episode: u8,
     cache: Option<&MediaCache>,
@@ -511,7 +514,8 @@ pub fn get_episode_info(
     }
 
     log::info!(target: "cli", "Cache miss for TV episode: {} S{:02}E{:02}. Fetching from OMDB.", series_name, season, episode);
-    let r = omdb_get_episode_metadata(omdb_api_key, series_name, season, episode)?;
+    let series = series_imdb_id.map_or(SeriesRef::Title(series_name), SeriesRef::ImdbId);
+    let r = omdb_get_episode_metadata(omdb_api_key, series, season, episode)?;
     let OmdbResponse::Episode { title, plot, imdb_rating, released, director, .. } = r else {
         return Err(format!("OMDB response was not an episode for: {} S{:02}E{:02}", series_name, season, episode).into());
     };
